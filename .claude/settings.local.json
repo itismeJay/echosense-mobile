@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E \"\\\\.\\(js|ts|json|md\\)$\")",
+      "Bash(npx expo *)",
+      "Bash(npm install *)",
+      "Bash(npx tsc *)",
+      "Bash(grep -E \"^expo-blur$|^expo-linear-gradient$|^react-native-reanimated$\")",
+      "Bash(grep -n \"\\\\[{\" app/*.tsx lib/*.ts components/*.tsx)",
+      "Bash(npm start *)",
+      "Bash(node *)",
+      "Bash(fuser -k 8081/tcp)",
+      "Bash(lsof -ti:8081)",
+      "Bash(xargs kill *)",
+      "Bash(npm ls *)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); deps={**d.get\\('dependencies',{}\\), **d.get\\('peerDependencies',{}\\)}; [print\\(k\\) for k in deps]\")"
+    ]
+  }
+}
