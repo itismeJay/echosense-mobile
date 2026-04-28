@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ScrollView,
   View,
@@ -7,7 +7,9 @@ import {
   TouchableOpacity,
   RefreshControl,
   SafeAreaView,
+  Platform,
 } from 'react-native';
+import * as Notifications from 'expo-notifications';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import {
@@ -27,6 +29,35 @@ import DetectionStatus from '../components/DetectionStatus';
 import AudioVisualizer from '../components/AudioVisualizer';
 import LoadingScreen from '../components/LoadingScreen';
 
+async function sendAlertNotification(alert: Alert): Promise<void> {
+  const isHigh = alert.severity === 'high';
+  const title = 'EchoSense';
+  const severityLabel = alert.severity.charAt(0).toUpperCase() + alert.severity.slice(1);
+  const body = `${severityLabel} severity detected at ${alert.location}`;
+  const content = {
+    title,
+    body,
+    sound: isHigh,
+    data: { isHigh, alertId: alert.id },
+  };
+
+  if (isHigh) {
+    await Notifications.scheduleNotificationAsync({
+      content,
+      trigger: Platform.OS === 'android' ? { seconds: 1, channelId: 'high-alerts' } : null,
+    });
+    await Notifications.scheduleNotificationAsync({
+      content,
+      trigger: Platform.OS === 'android' ? { seconds: 10, channelId: 'high-alerts' } : { seconds: 10 },
+    });
+  } else {
+    await Notifications.scheduleNotificationAsync({
+      content,
+      trigger: Platform.OS === 'android' ? { seconds: 1, channelId: 'other-alerts' } : null,
+    });
+  }
+}
+
 export default function Dashboard() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [stats, setStats] = useState<LogStats | null>(null);
@@ -34,6 +65,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const seenAlertIds = useRef<Set<number>>(new Set());
+  const isFirstLoad = useRef(true);
 
   const load = useCallback(async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
@@ -43,6 +76,18 @@ export default function Dashboard() {
         fetchStats(),
         checkConnectivity(),
       ]);
+
+      if (isFirstLoad.current) {
+        alertsData.forEach((a) => seenAlertIds.current.add(a.id));
+        isFirstLoad.current = false;
+      } else {
+        const newAlerts = alertsData.filter((a) => !seenAlertIds.current.has(a.id));
+        alertsData.forEach((a) => seenAlertIds.current.add(a.id));
+        for (const alert of newAlerts) {
+          await sendAlertNotification(alert);
+        }
+      }
+
       setAlerts(alertsData);
       setStats(statsData);
       setOnline(isOnline);
