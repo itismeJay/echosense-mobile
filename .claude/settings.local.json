@@ -13,7 +13,11 @@
       "Bash(lsof -ti:8081)",
       "Bash(xargs kill *)",
       "Bash(npm ls *)",
-      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); deps={**d.get\\('dependencies',{}\\), **d.get\\('peerDependencies',{}\\)}; [print\\(k\\) for k in deps]\")"
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); deps={**d.get\\('dependencies',{}\\), **d.get\\('peerDependencies',{}\\)}; [print\\(k\\) for k in deps]\")",
+      "WebFetch(domain:echosense-backend-75h3.onrender.com)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
     ]
   }
 }
