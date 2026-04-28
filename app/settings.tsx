@@ -1,14 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import {
   View,
   Text,
   ScrollView,
   StyleSheet,
   SafeAreaView,
+  TouchableOpacity,
+  Alert,
 } from 'react-native';
+import { router } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { checkConnectivity } from '../lib/api';
+import { logout } from '../lib/auth';
+import { AuthContext } from './_layout';
 import {
   COLORS,
   API_BASE_URL,
@@ -19,11 +24,31 @@ import {
 } from '../lib/constants';
 
 export default function Settings() {
+  const { onSignOut } = useContext(AuthContext);
   const [connected, setConnected] = useState<boolean | null>(null);
 
   useEffect(() => {
     checkConnectivity().then(setConnected);
   }, []);
+
+  function handleLogout() {
+    Alert.alert(
+      'Sign out',
+      'Are you sure you want to sign out?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign out',
+          style: 'destructive',
+          onPress: async () => {
+            await logout();
+            onSignOut();
+            router.replace('/login');
+          },
+        },
+      ]
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -124,6 +149,11 @@ export default function Settings() {
             value="Expo SDK 54 / React Native"
           />
         </SectionCard>
+
+        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.8}>
+          <Ionicons name="log-out-outline" size={18} color={COLORS.high} />
+          <Text style={styles.logoutText}>Sign out</Text>
+        </TouchableOpacity>
 
         <View style={{ height: 24 }} />
       </ScrollView>
@@ -260,5 +290,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.text,
     fontWeight: '500',
+  },
+  logoutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: `${COLORS.high}44`,
+    backgroundColor: `${COLORS.high}11`,
+    paddingVertical: 14,
+    marginBottom: 8,
+  },
+  logoutText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: COLORS.high,
   },
 });

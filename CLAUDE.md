@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Start dev server (opens QR code for Expo Go)
+# Start dev server (scan QR code with Expo Go on a physical device)
 npm start
 
 # Run on specific platform
@@ -14,43 +14,47 @@ npm run ios
 npm run web
 ```
 
-There is no test runner or lint script configured yet.
+No test runner or lint script is configured.
 
 ## Architecture
 
-**echosense-mobile** is an Expo (SDK ~54) React Native app with TypeScript and the New Architecture enabled. It appears to be a sound/noise monitoring and alerting application.
+**echosense-mobile** is an Expo SDK ~54 React Native app with TypeScript and the New Architecture enabled. It is a sound/noise monitoring dashboard that polls a REST backend every 5 seconds and fires local push notifications when new alerts arrive.
 
 ### Routing
 
-The app uses **Expo Router** (file-based routing) — `app/` maps directly to routes:
-- `app/_layout.tsx` — root layout (configure tab navigator here)
-- `app/index.tsx` — dashboard/home tab
-- `app/logs.tsx` — logs tab
-- `app/analytics.tsx` — analytics tab
+Expo Router (file-based). `app/` maps directly to routes:
 
-Navigation is driven by `@react-navigation/bottom-tabs` via Expo Router's tab layout.
+- `app/_layout.tsx` — root tab layout; also owns notification permission request and Android channel setup (runs once on mount)
+- `app/index.tsx` — dashboard: polls `/alerts` + `/logs/stats` every 5s, tracks seen alert IDs in a ref to fire notifications only for new ones
+- `app/logs.tsx` — filterable alert log list
+- `app/analytics.tsx` — charts via `react-native-chart-kit`
+- `app/settings.tsx` — API connection status, team info
+
+### Data & API Layer
+
+All backend communication is in `lib/api.ts` (axios, 10s timeout, base URL from `lib/constants.ts`):
+
+- `fetchAlerts()` → `GET /alerts`
+- `fetchLogs()` → `GET /logs`
+- `fetchStats()` → `GET /logs/stats`
+- `postAlert(payload)` → `POST /alerts`
+- `checkConnectivity()` → `GET /alerts` with 5s timeout, returns bool
+
+Utility formatters also live in `lib/api.ts`: `normalizeSeverity`, `formatConfidence`, `formatTimestamp`.
+
+Shared types (`Alert`, `LogStats`, `Severity`) are in `lib/types.ts`. Constants including `API_BASE_URL`, `COLORS`, `SEVERITY_COLORS`, and `REFRESH_INTERVAL_MS` (5000ms) are in `lib/constants.ts`.
+
+### Notification System
+
+- `_layout.tsx` calls `setNotificationHandler` at module level (foreground sound gating: plays sound only when `data.isHigh === true`)
+- On mount, requests permission and registers two Android channels: `high-alerts` (sound + vibration) and `other-alerts` (silent)
+- `app/index.tsx` holds `seenAlertIds` (a `useRef<Set<number>>`) and `isFirstLoad` ref — on first poll, existing alerts are silently registered; subsequent polls fire `scheduleNotificationAsync` for any unseen alert IDs
+- High severity → sound on both platforms; medium/low → silent
 
 ### Styling
 
-**NativeWind v4** is the styling solution — use Tailwind class names via `className` prop. Do not mix StyleSheet and NativeWind on the same component unnecessarily.
+The codebase uses `StyleSheet.create` for most component styles. NativeWind v4 is installed but sparingly used — don't mix both on the same component.
 
-### Data Layer
+### Backend
 
-- `lib/api.ts` — axios-based API client
-- `lib/types.ts` — shared TypeScript types (AlertCard, SeverityBadge, StatCard suggest alert/severity/metric domain types)
-- `lib/constants.ts` — shared constants (API base URL, etc.)
-
-### Key Dependencies
-
-| Package | Purpose |
-|---|---|
-| `expo-router` | File-based routing |
-| `nativewind` | Tailwind CSS for React Native |
-| `axios` | HTTP client for backend API |
-| `react-native-chart-kit` + `react-native-svg` | Charts on the analytics screen |
-| `expo-notifications` | Push notification support |
-| `expo-constants` | Access to app config/env at runtime |
-
-### Entry Point
-
-`index.ts` → `App.tsx` via `registerRootComponent`. Once Expo Router's `_layout.tsx` is configured, `App.tsx` will likely be replaced by the router's root.
+Hosted on Render.com free tier at `https://echosense-backend-75h3.onrender.com`. Free tier spins down after 15 min of inactivity; cold starts take 30–60s, which exceeds the 5s connectivity check timeout and triggers the offline indicator.

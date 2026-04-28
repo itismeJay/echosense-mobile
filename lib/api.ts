@@ -1,5 +1,7 @@
 import axios from 'axios';
+import { router } from 'expo-router';
 import { API_BASE_URL } from './constants';
+import { getToken, logout } from './auth';
 import type { Alert, LogStats, Severity } from './types';
 
 const client = axios.create({
@@ -7,6 +9,25 @@ const client = axios.create({
   timeout: 10_000,
   headers: { 'Content-Type': 'application/json' },
 });
+
+client.interceptors.request.use(async (config) => {
+  const token = await getToken();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+client.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    if (error.response?.status === 401) {
+      await logout();
+      router.replace('/login');
+    }
+    return Promise.reject(error);
+  }
+);
 
 export async function fetchAlerts(): Promise<Alert[]> {
   const { data } = await client.get<Alert[]>('/alerts');
