@@ -19,6 +19,7 @@ import {
   fetchAlerts,
   fetchStats,
 } from '../lib/api';
+import { getNotifPrefs } from '../lib/notifications';
 import {
   COLORS,
   REFRESH_INTERVAL_MS,
@@ -33,35 +34,35 @@ import LoadingScreen from '../components/LoadingScreen';
 
 async function sendAlertNotification(alert: Alert): Promise<void> {
   const isHigh = alert.severity === 'high';
-  const title = 'EchoSense';
+
+  if (!isHigh) {
+    const prefs = await getNotifPrefs();
+    if (alert.severity === 'medium' && !prefs.medium) return;
+    if (alert.severity === 'low' && !prefs.low) return;
+  }
+
   const severityLabel = alert.severity.charAt(0).toUpperCase() + alert.severity.slice(1);
-  const body = `${severityLabel} severity detected at ${alert.location}`;
   const content = {
-    title,
-    body,
-    sound: isHigh,
+    title: 'EchoSense',
+    body: `${severityLabel} severity detected at ${alert.location}`,
+    sound: true,
     data: { isHigh, alertId: alert.id },
   };
+  const channelId = isHigh ? 'high-alerts' : 'other-alerts';
+
+  await Notifications.scheduleNotificationAsync({
+    content,
+    trigger: Platform.OS === 'android'
+      ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 1, channelId }
+      : null,
+  });
 
   if (isHigh) {
     await Notifications.scheduleNotificationAsync({
       content,
       trigger: Platform.OS === 'android'
-        ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 1, channelId: 'high-alerts' }
-        : null,
-    });
-    await Notifications.scheduleNotificationAsync({
-      content,
-      trigger: Platform.OS === 'android'
-        ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 10, channelId: 'high-alerts' }
+        ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 10, channelId }
         : { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 10 },
-    });
-  } else {
-    await Notifications.scheduleNotificationAsync({
-      content,
-      trigger: Platform.OS === 'android'
-        ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 1, channelId: 'other-alerts' }
-        : null,
     });
   }
 }

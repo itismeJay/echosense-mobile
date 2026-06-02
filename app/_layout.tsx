@@ -22,16 +22,13 @@ export const AuthContext = createContext<{
 });
 
 Notifications.setNotificationHandler({
-  handleNotification: async (notification) => {
-    const isHigh = notification.request.content.data?.isHigh === true;
-    return {
-      shouldShowAlert: true,
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: isHigh,
-      shouldSetBadge: false,
-    };
-  },
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
 });
 
 const TAB_BAR_STYLE = {
@@ -68,10 +65,11 @@ export default function RootLayout() {
             enableVibrate: true,
             vibrationPattern: [0, 80],
           });
+          await Notifications.deleteNotificationChannelAsync('other-alerts');
           await Notifications.setNotificationChannelAsync('other-alerts', {
             name: 'Other Alerts',
             importance: Notifications.AndroidImportance.DEFAULT,
-            sound: null,
+            sound: 'default',
             enableVibrate: false,
           });
         }

@@ -4,15 +4,17 @@ import {
   Text,
   ScrollView,
   StyleSheet,
-  SafeAreaView,
   TouchableOpacity,
+  Switch,
   Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { checkConnectivity } from '../lib/api';
 import { logout } from '../lib/auth';
+import { getNotifPrefs, saveNotifPrefs } from '../lib/notifications';
 import { AuthContext } from './_layout';
 import {
   COLORS,
@@ -26,10 +28,26 @@ import {
 export default function Settings() {
   const { onSignOut } = useContext(AuthContext);
   const [connected, setConnected] = useState<boolean | null>(null);
+  const [notifMedium, setNotifMedium] = useState(true);
+  const [notifLow, setNotifLow] = useState(true);
 
   useEffect(() => {
     checkConnectivity().then(setConnected);
+    getNotifPrefs().then((prefs) => {
+      setNotifMedium(prefs.medium);
+      setNotifLow(prefs.low);
+    });
   }, []);
+
+  async function toggleMedium(value: boolean) {
+    setNotifMedium(value);
+    await saveNotifPrefs({ medium: value, low: notifLow });
+  }
+
+  async function toggleLow(value: boolean) {
+    setNotifLow(value);
+    await saveNotifPrefs({ medium: notifMedium, low: value });
+  }
 
   function handleLogout() {
     Alert.alert(
@@ -58,6 +76,33 @@ export default function Settings() {
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.title}>Settings</Text>
+
+        {/* Notifications Section */}
+        <SectionCard title="Notifications">
+          <NotifRow
+            color={COLORS.high}
+            icon="alert-circle"
+            label="High severity"
+            locked
+            value={true}
+          />
+          <View style={styles.divider} />
+          <NotifRow
+            color={COLORS.medium}
+            icon="warning"
+            label="Medium severity"
+            value={notifMedium}
+            onToggle={toggleMedium}
+          />
+          <View style={styles.divider} />
+          <NotifRow
+            color={COLORS.low}
+            icon="information-circle"
+            label="Low severity"
+            value={notifLow}
+            onToggle={toggleLow}
+          />
+        </SectionCard>
 
         {/* Connection Section */}
         <SectionCard title="Connection">
@@ -197,6 +242,41 @@ function InfoRow({
   );
 }
 
+function NotifRow({
+  icon,
+  label,
+  color,
+  value,
+  locked,
+  onToggle,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  color: string;
+  value: boolean;
+  locked?: boolean;
+  onToggle?: (v: boolean) => void;
+}) {
+  return (
+    <View style={styles.row}>
+      <Ionicons name={icon} size={16} color={color} />
+      <Text style={[styles.rowLabel, { color: COLORS.text }]}>{label}</Text>
+      {locked ? (
+        <View style={styles.lockedBadge}>
+          <Text style={styles.lockedText}>Always on</Text>
+        </View>
+      ) : (
+        <Switch
+          value={value}
+          onValueChange={onToggle}
+          trackColor={{ false: 'rgba(255,255,255,0.15)', true: `${COLORS.accent}99` }}
+          thumbColor={value ? COLORS.accent : 'rgba(255,255,255,0.5)'}
+        />
+      )}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
@@ -307,5 +387,17 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: COLORS.high,
+  },
+  lockedBadge: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  lockedText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: COLORS.textDim,
+    letterSpacing: 0.3,
   },
 });
