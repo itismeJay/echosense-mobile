@@ -8,12 +8,15 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as SecureStore from 'expo-secure-store';
 import { COLORS } from '../lib/constants';
 import { login, wakeup } from '../lib/auth';
+import { postPushToken } from '../lib/api';
+import { registerForPushNotifications } from '../lib/notifications';
 import { AuthContext } from './_layout';
 
 export default function LoginScreen() {
@@ -40,6 +43,15 @@ export default function LoginScreen() {
     slowTimer.current = setTimeout(() => setSlowHint(true), 5000);
     try {
       await login(email.trim(), password);
+      const pushToken = await registerForPushNotifications();
+      if (pushToken) {
+        try {
+          await postPushToken(pushToken);
+          await SecureStore.setItemAsync('push_token', pushToken);
+        } catch {
+          // non-critical: push token registration failure doesn't block login
+        }
+      }
       onSignIn();
       router.replace('/');
     } catch (err: any) {

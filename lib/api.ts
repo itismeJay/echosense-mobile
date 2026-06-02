@@ -6,7 +6,7 @@ import type { Alert, LogStats, Severity } from './types';
 
 const client = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10_000,
+  timeout: 20_000,
   headers: { 'Content-Type': 'application/json' },
 });
 
@@ -51,9 +51,13 @@ export async function postAlert(
   return data;
 }
 
+export async function postPushToken(token: string): Promise<void> {
+  await client.post('/users/push-token', { token });
+}
+
 export async function checkConnectivity(): Promise<boolean> {
   try {
-    await client.get('/alerts', { timeout: 5000 });
+    await client.get('/alerts', { timeout: 15000 });
     return true;
   } catch {
     return false;

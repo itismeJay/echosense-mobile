@@ -5,8 +5,11 @@ import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useState, createContext, useMemo } from 'react';
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import { COLORS } from '../lib/constants';
 import { getToken, wakeup } from '../lib/auth';
+
+const isExpoGo = Constants.executionEnvironment === 'storeClient';
 
 export const AuthContext = createContext<{
   isAuthenticated: boolean;
@@ -18,16 +21,20 @@ export const AuthContext = createContext<{
   onSignOut: () => {},
 });
 
-Notifications.setNotificationHandler({
-  handleNotification: async (notification) => {
-    const isHigh = notification.request.content.data?.isHigh === true;
-    return {
-      shouldShowAlert: true,
-      shouldPlaySound: isHigh,
-      shouldSetBadge: false,
-    };
-  },
-});
+if (!isExpoGo) {
+  Notifications.setNotificationHandler({
+    handleNotification: async (notification) => {
+      const isHigh = notification.request.content.data?.isHigh === true;
+      return {
+        shouldShowAlert: true,
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: isHigh,
+        shouldSetBadge: false,
+      };
+    },
+  });
+}
 
 const TAB_BAR_STYLE = {
   backgroundColor: '#0d0d1a',
@@ -52,27 +59,41 @@ export default function RootLayout() {
         router.replace('/login');
       }
 
-      const { status } = await Notifications.requestPermissionsAsync();
-      if (status !== 'granted') return;
-
-      if (Platform.OS === 'android') {
-        await Notifications.deleteNotificationChannelAsync('high-alerts');
-        await Notifications.setNotificationChannelAsync('high-alerts', {
-          name: 'High Severity Alerts',
-          importance: Notifications.AndroidImportance.HIGH,
-          sound: 'default',
-          enableVibrate: true,
-          vibrationPattern: [0, 80],
-        });
-        await Notifications.setNotificationChannelAsync('other-alerts', {
-          name: 'Other Alerts',
-          importance: Notifications.AndroidImportance.DEFAULT,
-          sound: null,
-          enableVibrate: false,
-        });
+      if (!isExpoGo) {
+        const { status } = await Notifications.requestPermissionsAsync();
+        if (status === 'granted' && Platform.OS === 'android') {
+          await Notifications.deleteNotificationChannelAsync('high-alerts');
+          await Notifications.setNotificationChannelAsync('high-alerts', {
+            name: 'High Severity Alerts',
+            importance: Notifications.AndroidImportance.HIGH,
+            sound: 'default',
+            enableVibrate: true,
+            vibrationPattern: [0, 80],
+          });
+          await Notifications.setNotificationChannelAsync('other-alerts', {
+            name: 'Other Alerts',
+            importance: Notifications.AndroidImportance.DEFAULT,
+            sound: null,
+            enableVibrate: false,
+          });
+        }
       }
     }
     setup();
+
+    if (isExpoGo) return;
+
+    const receivedSub = Notifications.addNotificationReceivedListener(() => {
+      // foreground display is governed by setNotificationHandler above
+    });
+    const responseSub = Notifications.addNotificationResponseReceivedListener(() => {
+      router.replace('/');
+    });
+
+    return () => {
+      receivedSub.remove();
+      responseSub.remove();
+    };
   }, []);
 
   const ctx = useMemo(
