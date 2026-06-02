@@ -6,16 +6,18 @@ import {
   StyleSheet,
   TouchableOpacity,
   RefreshControl,
-  SafeAreaView,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
+
+const isExpoGo = Constants.executionEnvironment === 'storeClient';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import {
   fetchAlerts,
   fetchStats,
-  checkConnectivity,
 } from '../lib/api';
 import {
   COLORS,
@@ -44,16 +46,22 @@ async function sendAlertNotification(alert: Alert): Promise<void> {
   if (isHigh) {
     await Notifications.scheduleNotificationAsync({
       content,
-      trigger: Platform.OS === 'android' ? { seconds: 1, channelId: 'high-alerts' } : null,
+      trigger: Platform.OS === 'android'
+        ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 1, channelId: 'high-alerts' }
+        : null,
     });
     await Notifications.scheduleNotificationAsync({
       content,
-      trigger: Platform.OS === 'android' ? { seconds: 10, channelId: 'high-alerts' } : { seconds: 10 },
+      trigger: Platform.OS === 'android'
+        ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 10, channelId: 'high-alerts' }
+        : { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 10 },
     });
   } else {
     await Notifications.scheduleNotificationAsync({
       content,
-      trigger: Platform.OS === 'android' ? { seconds: 1, channelId: 'other-alerts' } : null,
+      trigger: Platform.OS === 'android'
+        ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 1, channelId: 'other-alerts' }
+        : null,
     });
   }
 }
@@ -64,17 +72,21 @@ export default function Dashboard() {
   const [online, setOnline] = useState(true);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [slowLoad, setSlowLoad] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const seenAlertIds = useRef<Set<number>>(new Set());
   const isFirstLoad = useRef(true);
+  const slowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
+    if (!showRefresh && isFirstLoad.current) {
+      slowTimer.current = setTimeout(() => setSlowLoad(true), 6000);
+    }
     try {
-      const [alertsData, statsData, isOnline] = await Promise.all([
+      const [alertsData, statsData] = await Promise.all([
         fetchAlerts(),
         fetchStats(),
-        checkConnectivity(),
       ]);
 
       if (isFirstLoad.current) {
@@ -90,12 +102,17 @@ export default function Dashboard() {
 
       setAlerts(alertsData);
       setStats(statsData);
-      setOnline(isOnline);
+      setOnline(true);
       setError(null);
     } catch {
       setError('Failed to load data. Check your connection.');
       setOnline(false);
     } finally {
+      if (slowTimer.current) {
+        clearTimeout(slowTimer.current);
+        slowTimer.current = null;
+      }
+      setSlowLoad(false);
       setLoading(false);
       setRefreshing(false);
     }
@@ -114,7 +131,11 @@ export default function Dashboard() {
     : false;
 
   if (loading) {
-    return <LoadingScreen message="Connecting to EchoSense..." />;
+    return (
+      <LoadingScreen
+        message={slowLoad ? 'Server is waking up, please wait...' : 'Connecting to EchoSense...'}
+      />
+    );
   }
 
   return (

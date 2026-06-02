@@ -21,20 +21,18 @@ export const AuthContext = createContext<{
   onSignOut: () => {},
 });
 
-if (!isExpoGo) {
-  Notifications.setNotificationHandler({
-    handleNotification: async (notification) => {
-      const isHigh = notification.request.content.data?.isHigh === true;
-      return {
-        shouldShowAlert: true,
-        shouldShowBanner: true,
-        shouldShowList: true,
-        shouldPlaySound: isHigh,
-        shouldSetBadge: false,
-      };
-    },
-  });
-}
+Notifications.setNotificationHandler({
+  handleNotification: async (notification) => {
+    const isHigh = notification.request.content.data?.isHigh === true;
+    return {
+      shouldShowAlert: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: isHigh,
+      shouldSetBadge: false,
+    };
+  },
+});
 
 const TAB_BAR_STYLE = {
   backgroundColor: '#0d0d1a',
@@ -80,8 +78,6 @@ export default function RootLayout() {
       }
     }
     setup();
-
-    if (isExpoGo) return;
 
     const receivedSub = Notifications.addNotificationReceivedListener(() => {
       // foreground display is governed by setNotificationHandler above
