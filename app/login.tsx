@@ -44,12 +44,14 @@ export default function LoginScreen() {
     try {
       await login(email.trim(), password);
       const pushToken = await registerForPushNotifications();
+      console.log('[Login] push token:', pushToken ?? 'null — skipping backend save');
       if (pushToken) {
         try {
           await postPushToken(pushToken);
           await SecureStore.setItemAsync('push_token', pushToken);
-        } catch {
-          // non-critical: push token registration failure doesn't block login
+          console.log('[Login] push token saved to backend');
+        } catch (err) {
+          console.error('[Login] postPushToken failed:', err);
         }
       }
       onSignIn();
