@@ -8,6 +8,8 @@ const PROJECT_ID =
   (Constants.expoConfig?.extra?.eas?.projectId as string | undefined) ??
   '4a4a3316-a896-4f42-bc76-ca4b833e5909';
 
+const isExpoGo = Constants.executionEnvironment === 'storeClient';
+
 export interface NotifPrefs {
   medium: boolean;
   low: boolean;
@@ -34,6 +36,11 @@ export async function saveNotifPrefs(prefs: NotifPrefs): Promise<void> {
 export async function registerForPushNotifications(): Promise<string | null> {
   if (!Device.isDevice) {
     console.log('[Push] skipped — not a physical device');
+    return null;
+  }
+
+  if (isExpoGo) {
+    console.log('[Push] skipped — Expo Go removed remote push support in SDK 53. Use a dev build.');
     return null;
   }
 
