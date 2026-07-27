@@ -1,212 +1,215 @@
-import React, { useState, useEffect, useContext } from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
+import React, { useContext, useEffect, useState } from 'react';
 import {
-  View,
-  Text,
   ScrollView,
   StyleSheet,
+  Text,
   TouchableOpacity,
-  Switch,
-  Alert,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
-import { BlurView } from 'expo-blur';
-import { Ionicons } from '@expo/vector-icons';
 import { checkConnectivity } from '../lib/api';
-import { logout } from '../lib/auth';
-import { getNotifPrefs, saveNotifPrefs } from '../lib/notifications';
-import { AuthContext } from './_layout';
 import {
-  COLORS,
   API_BASE_URL,
-  TEAM,
-  SCHOOL,
-  CAPSTONE_YEAR,
   APP_VERSION,
+  CAPSTONE_YEAR,
+  COLORS,
+  RADII,
+  SCHOOL,
+  SPACING,
+  TEAM,
+  TYPOGRAPHY,
 } from '../lib/constants';
+import ScreenState from '../components/ScreenState';
+import { AuthContext } from './_layout';
 
-export default function Settings() {
-  const { onSignOut } = useContext(AuthContext);
+export default function SystemInformationScreen() {
+  const { user } = useContext(AuthContext);
   const [connected, setConnected] = useState<boolean | null>(null);
-  const [notifMedium, setNotifMedium] = useState(true);
-  const [notifLow, setNotifLow] = useState(true);
 
   useEffect(() => {
-    checkConnectivity().then(setConnected);
-    getNotifPrefs().then((prefs) => {
-      setNotifMedium(prefs.medium);
-      setNotifLow(prefs.low);
-    });
-  }, []);
+    if (user?.role === 'admin') checkConnectivity().then(setConnected);
+  }, [user?.role]);
 
-  async function toggleMedium(value: boolean) {
-    setNotifMedium(value);
-    await saveNotifPrefs({ medium: value, low: notifLow });
-  }
-
-  async function toggleLow(value: boolean) {
-    setNotifLow(value);
-    await saveNotifPrefs({ medium: notifMedium, low: value });
-  }
-
-  function handleLogout() {
-    Alert.alert(
-      'Sign out',
-      'Are you sure you want to sign out?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Sign out',
-          style: 'destructive',
-          onPress: async () => {
-            await logout();
-            onSignOut();
-            router.replace('/login');
-          },
-        },
-      ]
+  if (user?.role !== 'admin') {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.deniedState}>
+          <ScreenState
+            icon="lock-closed-outline"
+            title="System information is administrator-only."
+            actionLabel="Back to profile"
+            onAction={() => router.replace('/profile')}
+          />
+        </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+      <View style={styles.topBar}>
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Back to profile"
+          style={styles.backButton}
+          onPress={() =>
+            router.canGoBack() ? router.back() : router.replace('/profile')
+          }
+        >
+          <Ionicons
+            name="arrow-back"
+            size={24}
+            color={COLORS.text}
+            importantForAccessibility="no-hide-descendants"
+          />
+        </TouchableOpacity>
+        <Text style={styles.topBarTitle}>System information</Text>
+        <View style={styles.topBarSpacer} />
+      </View>
+
       <ScrollView
         style={styles.screen}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.title}>Settings</Text>
+        <View style={styles.header}>
+          <Text accessibilityRole="header" style={styles.title}>
+            Administrator details
+          </Text>
+          <Text style={styles.subtitle}>
+            Technical mobile application information is kept separate from the
+            teacher experience.
+          </Text>
+        </View>
 
-        {/* Notifications Section */}
-        <SectionCard title="Notifications">
-          <NotifRow
-            color={COLORS.high}
-            icon="alert-circle"
-            label="High severity"
-            locked
-            value={true}
-          />
-          <View style={styles.divider} />
-          <NotifRow
-            color={COLORS.medium}
-            icon="warning"
-            label="Medium severity"
-            value={notifMedium}
-            onToggle={toggleMedium}
-          />
-          <View style={styles.divider} />
-          <NotifRow
-            color={COLORS.low}
-            icon="information-circle"
-            label="Low severity"
-            value={notifLow}
-            onToggle={toggleLow}
-          />
-        </SectionCard>
-
-        {/* Connection Section */}
-        <SectionCard title="Connection">
-          <InfoRow
-            icon="globe-outline"
-            label="API Endpoint"
-            value={API_BASE_URL.replace('https://', '')}
-          />
-          <View style={styles.divider} />
-          <View style={styles.row}>
-            <Ionicons
-              name="wifi-outline"
-              size={16}
-              color={COLORS.textMuted}
-            />
-            <Text style={styles.rowLabel}>Status</Text>
-            <View style={styles.rowRight}>
-              <View
-                style={[
-                  styles.statusDot,
-                  {
-                    backgroundColor:
-                      connected === null
-                        ? COLORS.textDim
-                        : connected
-                        ? COLORS.low
-                        : COLORS.high,
-                  },
-                ]}
+        <Section title="Mobile service connection">
+          <View
+            style={styles.connectionRow}
+            accessible
+            accessibilityLabel={`Mobile service connection: ${
+              connected === null
+                ? 'Checking'
+                : connected
+                  ? 'Connected'
+                  : 'Unavailable'
+            }`}
+          >
+            <View
+              style={[
+                styles.connectionIcon,
+                {
+                  backgroundColor:
+                    connected === false
+                      ? COLORS.dangerBackground
+                      : connected
+                        ? COLORS.successBackground
+                        : COLORS.surfaceSecondary,
+                },
+              ]}
+            >
+              <Ionicons
+                name={
+                  connected === false
+                    ? 'cloud-offline-outline'
+                    : 'cloud-done-outline'
+                }
+                size={22}
+                color={
+                  connected === false
+                    ? COLORS.danger
+                    : connected
+                      ? COLORS.success
+                      : COLORS.textSecondary
+                }
+                importantForAccessibility="no-hide-descendants"
               />
+            </View>
+            <View style={styles.connectionCopy}>
+              <Text style={styles.rowLabel}>API connection</Text>
               <Text
                 style={[
-                  styles.statusText,
-                  {
-                    color:
-                      connected === null
-                        ? COLORS.textDim
-                        : connected
-                        ? COLORS.low
-                        : COLORS.high,
-                  },
+                  styles.connectionStatus,
+                  connected === false && { color: COLORS.danger },
+                  connected === true && { color: COLORS.success },
                 ]}
               >
                 {connected === null
-                  ? 'Checking...'
+                  ? 'Checking…'
                   : connected
-                  ? 'Connected'
-                  : 'Unreachable'}
+                    ? 'Connected'
+                    : 'Unavailable'}
               </Text>
             </View>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Check the mobile service connection again"
+              style={styles.checkButton}
+              onPress={async () => {
+                setConnected(null);
+                setConnected(await checkConnectivity());
+              }}
+            >
+              <Text style={styles.checkButtonText}>Check again</Text>
+            </TouchableOpacity>
           </View>
-        </SectionCard>
-
-        {/* About Section */}
-        <SectionCard title="About">
-          <InfoRow icon="layers-outline" label="App" value={`EchoSense v${APP_VERSION}`} />
           <View style={styles.divider} />
-          <InfoRow icon="school-outline" label="Institution" value={SCHOOL} />
-          <View style={styles.divider} />
-          <InfoRow icon="calendar-outline" label="Capstone Year" value={CAPSTONE_YEAR} />
-        </SectionCard>
+          <InfoRow
+            icon="globe-outline"
+            label="API endpoint"
+            value={API_BASE_URL}
+          />
+        </Section>
 
-        {/* Team Section */}
-        <SectionCard title="Development Team">
-          {TEAM.map((name, idx) => (
-            <View key={name}>
-              <View style={styles.row}>
-                <View style={styles.avatarCircle}>
-                  <Ionicons name="person" size={14} color={COLORS.accent} />
-                </View>
-                <Text style={styles.teamName}>{name}</Text>
-              </View>
-              {idx < TEAM.length - 1 && <View style={styles.divider} />}
-            </View>
-          ))}
-        </SectionCard>
-
-        {/* System Section */}
-        <SectionCard title="System">
+        <Section title="Application">
           <InfoRow
             icon="phone-portrait-outline"
-            label="Platform"
-            value="iOS & Android"
+            label="Mobile app"
+            value={`EchoSense ${APP_VERSION}`}
           />
           <View style={styles.divider} />
           <InfoRow
-            icon="code-slash-outline"
+            icon="layers-outline"
             label="Framework"
             value="Expo SDK 54 / React Native"
           />
-        </SectionCard>
+          <View style={styles.divider} />
+          <InfoRow
+            icon="phone-portrait-outline"
+            label="Platforms"
+            value="iOS and Android"
+          />
+        </Section>
 
-        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.8}>
-          <Ionicons name="log-out-outline" size={18} color={COLORS.high} />
-          <Text style={styles.logoutText}>Sign out</Text>
-        </TouchableOpacity>
-
-        <View style={{ height: 24 }} />
+        <Section title="Project">
+          <InfoRow
+            icon="school-outline"
+            label="Institution"
+            value={SCHOOL}
+          />
+          <View style={styles.divider} />
+          <InfoRow
+            icon="calendar-outline"
+            label="Capstone year"
+            value={CAPSTONE_YEAR}
+          />
+          <View style={styles.divider} />
+          <View style={styles.teamBlock}>
+            <Text style={styles.rowLabel}>Development team</Text>
+            {TEAM.map((name) => (
+              <Text key={name} style={styles.teamName}>
+                {name}
+              </Text>
+            ))}
+          </View>
+        </Section>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-function SectionCard({
+function Section({
   title,
   children,
 }: {
@@ -214,10 +217,11 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <View style={styles.card}>
-      <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
-      <Text style={styles.sectionTitle}>{title}</Text>
-      <View style={styles.cardBody}>{children}</View>
+    <View style={styles.section}>
+      <Text accessibilityRole="header" style={styles.sectionTitle}>
+        {title}
+      </Text>
+      <View style={styles.card}>{children}</View>
     </View>
   );
 }
@@ -232,47 +236,23 @@ function InfoRow({
   value: string;
 }) {
   return (
-    <View style={styles.row}>
-      <Ionicons name={icon} size={16} color={COLORS.textMuted} />
-      <Text style={styles.rowLabel}>{label}</Text>
-      <Text style={styles.rowValue} numberOfLines={1}>
-        {value}
-      </Text>
-    </View>
-  );
-}
-
-function NotifRow({
-  icon,
-  label,
-  color,
-  value,
-  locked,
-  onToggle,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  label: string;
-  color: string;
-  value: boolean;
-  locked?: boolean;
-  onToggle?: (v: boolean) => void;
-}) {
-  return (
-    <View style={styles.row}>
-      <Ionicons name={icon} size={16} color={color} />
-      <Text style={[styles.rowLabel, { color: COLORS.text }]}>{label}</Text>
-      {locked ? (
-        <View style={styles.lockedBadge}>
-          <Text style={styles.lockedText}>Always on</Text>
-        </View>
-      ) : (
-        <Switch
-          value={value}
-          onValueChange={onToggle}
-          trackColor={{ false: 'rgba(255,255,255,0.15)', true: `${COLORS.accent}99` }}
-          thumbColor={value ? COLORS.accent : 'rgba(255,255,255,0.5)'}
-        />
-      )}
+    <View
+      style={styles.infoRow}
+      accessible
+      accessibilityLabel={`${label}: ${value}`}
+    >
+      <Ionicons
+        name={icon}
+        size={20}
+        color={COLORS.textSecondary}
+        importantForAccessibility="no-hide-descendants"
+      />
+      <View style={styles.infoCopy}>
+        <Text style={styles.rowLabel}>{label}</Text>
+        <Text style={styles.rowValue} selectable>
+          {value}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -282,122 +262,143 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.background,
   },
+  topBar: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: SPACING.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+    backgroundColor: COLORS.surface,
+  },
+  backButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 22,
+  },
+  topBarTitle: {
+    color: COLORS.text,
+    fontSize: TYPOGRAPHY.body,
+    fontWeight: '700',
+  },
+  topBarSpacer: {
+    width: 44,
+  },
   screen: {
     flex: 1,
-    backgroundColor: COLORS.background,
   },
   content: {
-    paddingHorizontal: 16,
-    paddingTop: 20,
+    width: '100%',
+    maxWidth: 680,
+    alignSelf: 'center',
+    padding: SPACING.lg,
+    paddingBottom: SPACING.xxxl,
+    gap: SPACING.xl,
+  },
+  header: {
+    gap: SPACING.xs,
   },
   title: {
-    fontSize: 24,
-    fontWeight: '800',
     color: COLORS.text,
-    letterSpacing: -0.4,
-    marginBottom: 20,
+    fontSize: TYPOGRAPHY.screenTitle,
+    fontWeight: '800',
+    letterSpacing: -0.5,
   },
-  card: {
-    borderRadius: 20,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: COLORS.cardBorder,
-    backgroundColor: COLORS.card,
-    marginBottom: 16,
+  subtitle: {
+    color: COLORS.textSecondary,
+    fontSize: TYPOGRAPHY.secondary,
+    lineHeight: 21,
+  },
+  deniedState: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: SPACING.lg,
+  },
+  section: {
+    gap: SPACING.sm,
   },
   sectionTitle: {
-    fontSize: 11,
+    color: COLORS.text,
+    fontSize: TYPOGRAPHY.sectionTitle,
     fontWeight: '700',
-    color: COLORS.accent,
-    textTransform: 'uppercase',
-    letterSpacing: 1.2,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 8,
   },
-  cardBody: {
-    paddingHorizontal: 16,
-    paddingBottom: 16,
+  card: {
+    overflow: 'hidden',
+    paddingHorizontal: SPACING.lg,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: RADII.lg,
   },
-  row: {
+  connectionRow: {
+    minHeight: 68,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingVertical: 10,
+    gap: SPACING.md,
+    paddingVertical: SPACING.md,
+  },
+  connectionIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  connectionCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  connectionStatus: {
+    color: COLORS.textSecondary,
+    fontSize: TYPOGRAPHY.caption,
+    fontWeight: '600',
+  },
+  checkButton: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: SPACING.sm,
+  },
+  checkButtonText: {
+    color: COLORS.primary,
+    fontSize: TYPOGRAPHY.caption,
+    fontWeight: '700',
+  },
+  infoRow: {
+    minHeight: 60,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: SPACING.md,
+    paddingVertical: SPACING.md,
+  },
+  infoCopy: {
+    flex: 1,
+    gap: 2,
   },
   rowLabel: {
-    fontSize: 14,
-    color: COLORS.textMuted,
-    flex: 1,
+    color: COLORS.text,
+    fontSize: TYPOGRAPHY.secondary,
+    fontWeight: '600',
+    lineHeight: 20,
   },
   rowValue: {
-    fontSize: 13,
-    color: COLORS.text,
-    fontWeight: '500',
-    maxWidth: '55%',
-    textAlign: 'right',
-  },
-  rowRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  statusText: {
-    fontSize: 13,
-    fontWeight: '600',
+    color: COLORS.textSecondary,
+    fontSize: TYPOGRAPHY.caption,
+    lineHeight: 19,
   },
   divider: {
     height: 1,
-    backgroundColor: COLORS.cardBorder,
-    marginVertical: 2,
+    backgroundColor: COLORS.border,
   },
-  avatarCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: `${COLORS.accent}22`,
-    borderWidth: 1,
-    borderColor: `${COLORS.accent}44`,
-    alignItems: 'center',
-    justifyContent: 'center',
+  teamBlock: {
+    gap: SPACING.xs,
+    paddingVertical: SPACING.md,
   },
   teamName: {
-    fontSize: 14,
-    color: COLORS.text,
-    fontWeight: '500',
-  },
-  logoutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: `${COLORS.high}44`,
-    backgroundColor: `${COLORS.high}11`,
-    paddingVertical: 14,
-    marginBottom: 8,
-  },
-  logoutText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: COLORS.high,
-  },
-  lockedBadge: {
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  lockedText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: COLORS.textDim,
-    letterSpacing: 0.3,
+    color: COLORS.textSecondary,
+    fontSize: TYPOGRAPHY.secondary,
+    lineHeight: 21,
   },
 });

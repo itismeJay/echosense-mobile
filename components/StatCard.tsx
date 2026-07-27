@@ -1,8 +1,7 @@
-import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { COLORS } from '../lib/constants';
+import { COLORS, RADII, SPACING, TYPOGRAPHY } from '../lib/constants';
 
 interface Props {
   label: string;
@@ -13,55 +12,54 @@ interface Props {
 
 export default function StatCard({ label, value, color, icon }: Props) {
   return (
-    <View style={styles.wrapper}>
-      <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
-      <View style={[styles.colorBar, { backgroundColor: color }]} />
-      <View style={styles.content}>
-        <View style={[styles.iconCircle, { backgroundColor: `${color}22` }]}>
-          <Ionicons name={icon} size={18} color={color} />
-        </View>
-        <Text style={styles.value}>{value}</Text>
-        <Text style={styles.label}>{label}</Text>
+    <View
+      style={styles.card}
+      accessible
+      accessibilityRole="summary"
+      accessibilityLabel={`${label}: ${value}`}
+    >
+      <View style={[styles.icon, { backgroundColor: COLORS.surfaceSecondary }]}>
+        <Ionicons
+          name={icon}
+          size={21}
+          color={color}
+          importantForAccessibility="no-hide-descendants"
+        />
       </View>
+      <Text style={styles.value}>{value}</Text>
+      <Text style={styles.label}>{label}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrapper: {
+  card: {
     flex: 1,
-    borderRadius: 16,
-    overflow: 'hidden',
+    minWidth: 132,
+    backgroundColor: COLORS.surface,
+    borderRadius: RADII.lg,
     borderWidth: 1,
-    borderColor: COLORS.cardBorder,
-    backgroundColor: COLORS.card,
-    margin: 4,
-    minWidth: '45%',
+    borderColor: COLORS.border,
+    padding: SPACING.lg,
+    gap: SPACING.sm,
   },
-  colorBar: {
-    height: 3,
-    width: '100%',
-  },
-  content: {
-    padding: 16,
-    gap: 8,
-  },
-  iconCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  icon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    alignSelf: 'flex-start',
   },
   value: {
-    fontSize: 28,
-    fontWeight: '700',
+    fontSize: 30,
+    fontWeight: '800',
     color: COLORS.text,
+    fontVariant: ['tabular-nums'],
   },
   label: {
-    fontSize: 12,
-    color: COLORS.textMuted,
-    fontWeight: '500',
+    fontSize: TYPOGRAPHY.secondary,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+    lineHeight: 20,
   },
 });

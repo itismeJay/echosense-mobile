@@ -1,19 +1,25 @@
-import React, { useState, useContext, useRef, useEffect } from 'react';
+import React, {
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as SecureStore from 'expo-secure-store';
-import { COLORS } from '../lib/constants';
+import { COLORS, RADII, SPACING, TYPOGRAPHY } from '../lib/constants';
 import { login, wakeup } from '../lib/auth';
 import { postPushToken } from '../lib/api';
 import { registerForPushNotifications } from '../lib/notifications';
@@ -27,43 +33,66 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [slowHint, setSlowHint] = useState(false);
   const [error, setError] = useState('');
-
-  useEffect(() => { wakeup(); }, []);
-
+  const passwordInput = useRef<TextInput>(null);
   const slowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    wakeup();
+    return () => {
+      if (slowTimer.current) clearTimeout(slowTimer.current);
+    };
+  }, []);
+
+  async function syncPushRegistration() {
+    const pushToken = await registerForPushNotifications();
+    if (!pushToken) return;
+
+    try {
+      await postPushToken(pushToken);
+      await SecureStore.setItemAsync('push_token', pushToken);
+      if (__DEV__) console.info('[Push] Registration saved successfully.');
+    } catch {
+      if (__DEV__) console.warn('[Push] Registration could not be saved.');
+    }
+  }
 
   async function handleLogin() {
     if (!email.trim() || !password) {
-      setError('Please enter your email and password.');
+      setError('Enter your email address and password.');
       return;
     }
+
     setLoading(true);
     setSlowHint(false);
     setError('');
     slowTimer.current = setTimeout(() => setSlowHint(true), 5000);
+
     try {
-      await login(email.trim(), password);
-      const pushToken = await registerForPushNotifications();
-      console.log('[Login] push token:', pushToken ?? 'null — skipping backend save');
-      if (pushToken) {
-        try {
-          await postPushToken(pushToken);
-          await SecureStore.setItemAsync('push_token', pushToken);
-          console.log('[Login] push token saved to backend');
-        } catch (err) {
-          console.error('[Login] postPushToken failed:', err);
-        }
-      }
-      onSignIn();
+      const signedInUser = await login(email.trim(), password);
+      await syncPushRegistration();
+      onSignIn(signedInUser);
       router.replace('/');
-    } catch (err: any) {
-      if (err.response?.status === 401) {
-        setError('Invalid credentials');
-      } else {
-        setError('Unable to reach server');
-      }
+    } catch (caught: unknown) {
+      const status =
+        typeof caught === 'object' &&
+        caught !== null &&
+        'response' in caught &&
+        typeof caught.response === 'object' &&
+        caught.response !== null &&
+        'status' in caught.response
+          ? caught.response.status
+          : null;
+
+      setError(
+        status === 401
+          ? 'The email or password wasn’t recognized.'
+          : 'We couldn’t connect to EchoSense. Check your connection and try again.'
+      );
     } finally {
-      if (slowTimer.current) clearTimeout(slowTimer.current);
+      if (slowTimer.current) {
+        clearTimeout(slowTimer.current);
+        slowTimer.current = null;
+      }
       setLoading(false);
       setSlowHint(false);
     }
@@ -75,65 +104,118 @@ export default function LoginScreen() {
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <View style={styles.inner}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
           <View style={styles.header}>
-            <Text style={styles.logo}>EchoSense</Text>
-            <Text style={styles.subtitle}>Staff access only</Text>
+            <View style={styles.logoMark}>
+              <Ionicons
+                name="school-outline"
+                size={30}
+                color={COLORS.primary}
+                importantForAccessibility="no-hide-descendants"
+              />
+            </View>
+            <Text accessibilityRole="header" style={styles.logo}>
+              EchoSense
+            </Text>
+            <Text style={styles.subtitle}>
+              Classroom alerts, presented clearly for school staff.
+            </Text>
           </View>
 
-          <View style={styles.form}>
-            <TextInput
-              style={styles.input}
-              placeholder="Email"
-              placeholderTextColor={COLORS.textDim}
-              value={email}
-              onChangeText={setEmail}
-              autoCapitalize="none"
-              keyboardType="email-address"
-              autoComplete="email"
-            />
+          <View style={styles.formCard}>
+            <Text accessibilityRole="header" style={styles.formTitle}>
+              Sign in
+            </Text>
 
-            <View style={styles.passwordRow}>
+            <View style={styles.field}>
+              <Text style={styles.label}>Email address</Text>
               <TextInput
-                style={[styles.input, styles.passwordInput]}
-                placeholder="Password"
-                placeholderTextColor={COLORS.textDim}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry={!showPassword}
-                autoComplete="password"
+                style={styles.input}
+                accessibilityLabel="Email address"
+                placeholder="name@school.edu"
+                placeholderTextColor={COLORS.textMuted}
+                value={email}
+                onChangeText={setEmail}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="email-address"
+                autoComplete="email"
+                returnKeyType="next"
+                onSubmitEditing={() => passwordInput.current?.focus()}
               />
-              <TouchableOpacity
-                style={styles.eyeButton}
-                onPress={() => setShowPassword((v) => !v)}
-              >
-                <Ionicons
-                  name={showPassword ? 'eye-off' : 'eye'}
-                  size={20}
-                  color={COLORS.textMuted}
-                />
-              </TouchableOpacity>
             </View>
 
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+            <View style={styles.field}>
+              <Text style={styles.label}>Password</Text>
+              <View style={styles.passwordRow}>
+                <TextInput
+                  ref={passwordInput}
+                  style={[styles.input, styles.passwordInput]}
+                  accessibilityLabel="Password"
+                  placeholder="Enter your password"
+                  placeholderTextColor={COLORS.textMuted}
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry={!showPassword}
+                  autoComplete="password"
+                  returnKeyType="done"
+                  onSubmitEditing={handleLogin}
+                />
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    showPassword ? 'Hide password' : 'Show password'
+                  }
+                  style={styles.eyeButton}
+                  onPress={() => setShowPassword((value) => !value)}
+                >
+                  <Ionicons
+                    name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+                    size={22}
+                    color={COLORS.textSecondary}
+                    importantForAccessibility="no-hide-descendants"
+                  />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {error ? (
+              <Text
+                accessibilityRole="alert"
+                accessibilityLiveRegion="assertive"
+                style={styles.error}
+              >
+                {error}
+              </Text>
+            ) : null}
             {slowHint && !error ? (
-              <Text style={styles.hint}>Server is waking up, please wait...</Text>
+              <Text accessibilityLiveRegion="polite" style={styles.hint}>
+                EchoSense is taking a little longer to respond. Please keep this
+                screen open.
+              </Text>
             ) : null}
 
             <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={loading ? 'Signing in' : 'Sign in'}
+              accessibilityState={{ disabled: loading, busy: loading }}
               style={[styles.button, loading && styles.buttonLoading]}
               onPress={handleLogin}
               disabled={loading}
-              activeOpacity={0.8}
+              activeOpacity={0.75}
             >
               {loading ? (
-                <ActivityIndicator color="#fff" size="small" />
+                <ActivityIndicator color={COLORS.white} size="small" />
               ) : (
                 <Text style={styles.buttonText}>Sign in</Text>
               )}
             </TouchableOpacity>
           </View>
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -147,84 +229,114 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  inner: {
-    flex: 1,
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
-    paddingHorizontal: 28,
+    paddingHorizontal: SPACING.xl,
+    paddingVertical: SPACING.xxxl,
   },
   header: {
     alignItems: 'center',
-    marginBottom: 48,
+    marginBottom: SPACING.xxl,
+  },
+  logoMark: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: COLORS.informationBackground,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: SPACING.md,
   },
   logo: {
-    fontSize: 36,
+    fontSize: 30,
     fontWeight: '800',
-    color: COLORS.accent,
-    letterSpacing: -1,
-    marginBottom: 8,
+    color: COLORS.text,
+    letterSpacing: -0.6,
   },
   subtitle: {
-    fontSize: 15,
-    color: COLORS.textMuted,
-    fontWeight: '500',
-    letterSpacing: 0.2,
+    maxWidth: 320,
+    marginTop: SPACING.sm,
+    fontSize: TYPOGRAPHY.secondary,
+    lineHeight: 21,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
   },
-  form: {
-    gap: 12,
+  formCard: {
+    width: '100%',
+    maxWidth: 480,
+    alignSelf: 'center',
+    gap: SPACING.lg,
+    padding: SPACING.xl,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: RADII.lg,
+  },
+  formTitle: {
+    color: COLORS.text,
+    fontSize: TYPOGRAPHY.sectionTitle,
+    fontWeight: '700',
+  },
+  field: {
+    gap: SPACING.sm,
+  },
+  label: {
+    color: COLORS.text,
+    fontSize: TYPOGRAPHY.secondary,
+    fontWeight: '600',
   },
   input: {
-    backgroundColor: COLORS.card,
+    minHeight: 52,
+    backgroundColor: COLORS.surface,
     borderWidth: 1,
-    borderColor: COLORS.cardBorder,
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 16,
+    borderColor: COLORS.border,
+    borderRadius: RADII.md,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    fontSize: TYPOGRAPHY.body,
     color: COLORS.text,
   },
   passwordRow: {
     position: 'relative',
   },
   passwordInput: {
-    paddingRight: 48,
+    paddingRight: 56,
   },
   eyeButton: {
     position: 'absolute',
-    right: 14,
-    top: 0,
-    bottom: 0,
+    right: 4,
+    top: 4,
+    width: 44,
+    height: 44,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 4,
   },
   error: {
-    fontSize: 14,
-    color: COLORS.high,
-    textAlign: 'center',
-    marginTop: 4,
+    fontSize: TYPOGRAPHY.secondary,
+    color: COLORS.danger,
+    lineHeight: 21,
   },
   hint: {
-    fontSize: 13,
-    color: COLORS.textMuted,
-    textAlign: 'center',
-    marginTop: 4,
+    fontSize: TYPOGRAPHY.caption,
+    color: COLORS.textSecondary,
+    lineHeight: 19,
   },
   button: {
-    backgroundColor: COLORS.accent,
-    borderRadius: 14,
-    paddingVertical: 16,
+    minHeight: 52,
+    backgroundColor: COLORS.primary,
+    borderRadius: RADII.md,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 8,
-    minHeight: 52,
   },
   buttonLoading: {
     opacity: 0.7,
   },
   buttonText: {
-    color: '#fff',
-    fontSize: 16,
+    color: COLORS.white,
+    fontSize: TYPOGRAPHY.body,
     fontWeight: '700',
-    letterSpacing: 0.3,
   },
 });

@@ -1,190 +1,243 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import {
+  RefreshControl,
   ScrollView,
-  View,
-  Text,
   StyleSheet,
-  Dimensions,
+  Text,
   TouchableOpacity,
-  SafeAreaView,
+  useWindowDimensions,
+  View,
 } from 'react-native';
-import { BlurView } from 'expo-blur';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { router } from 'expo-router';
 import { BarChart } from 'react-native-chart-kit';
 import { Ionicons } from '@expo/vector-icons';
 import { fetchStats } from '../lib/api';
-import { COLORS } from '../lib/constants';
+import {
+  COLORS,
+  RADII,
+  SPACING,
+  TYPOGRAPHY,
+} from '../lib/constants';
+import { canViewReports } from '../lib/presentation';
 import type { LogStats } from '../lib/types';
 import LoadingScreen from '../components/LoadingScreen';
+import ScreenState from '../components/ScreenState';
+import StatCard from '../components/StatCard';
+import { AuthContext } from './_layout';
 
-const { width } = Dimensions.get('window');
-const CHART_WIDTH = width - 48;
-
-export default function Analytics() {
+export default function ReportsScreen() {
+  const { user } = useContext(AuthContext);
+  const { width } = useWindowDimensions();
   const [stats, setStats] = useState<LogStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (showRefresh = false) => {
+    if (showRefresh) setRefreshing(true);
     try {
-      const data = await fetchStats();
-      setStats(data);
-      setError(null);
+      setStats(await fetchStats());
+      setError(false);
     } catch {
-      setError('Failed to load analytics.');
+      setError(true);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (canViewReports(user?.role)) load();
+    else setLoading(false);
+  }, [load, user?.role]);
 
-  if (loading) return <LoadingScreen message="Loading analytics..." />;
-
-  const chartData = {
-    labels: ['High', 'Medium', 'Low'],
-    datasets: [
-      {
-        data: [
-          stats?.high_severity ?? 0,
-          stats?.medium_severity ?? 0,
-          stats?.low_severity ?? 0,
-        ],
-      },
-    ],
-  };
-
-  const chartConfig = {
-    backgroundColor: 'transparent',
-    backgroundGradientFrom: '#0f0f1a',
-    backgroundGradientTo: '#0f0f1a',
-    decimalPlaces: 0,
-    color: (opacity = 1) => `rgba(99, 102, 241, ${opacity})`,
-    labelColor: () => 'rgba(255,255,255,0.5)',
-    propsForBars: { rx: 8, ry: 8 },
-    propsForBackgroundLines: { strokeWidth: 0 },
-  };
-
+  const chartWidth = Math.max(240, Math.min(width - 56, 640));
   const total = stats?.total_alerts ?? 0;
+  const chartData = useMemo(
+    () => ({
+      labels: ['High', 'Medium', 'Low'],
+      datasets: [
+        {
+          data: [
+            stats?.high_severity ?? 0,
+            stats?.medium_severity ?? 0,
+            stats?.low_severity ?? 0,
+          ],
+        },
+      ],
+    }),
+    [stats]
+  );
 
-  const summaryItems = [
-    { label: 'Total', value: total, color: COLORS.accent },
-    { label: 'High', value: stats?.high_severity ?? 0, color: COLORS.high },
-    { label: 'Medium', value: stats?.medium_severity ?? 0, color: COLORS.medium },
-    { label: 'Low', value: stats?.low_severity ?? 0, color: COLORS.low },
-  ];
+  if (loading) {
+    return <LoadingScreen message="Loading alert reports…" />;
+  }
 
-  const distributionItems = [
-    {
-      label: 'High',
-      value: stats?.high_severity ?? 0,
-      color: COLORS.high,
-    },
-    {
-      label: 'Medium',
-      value: stats?.medium_severity ?? 0,
-      color: COLORS.medium,
-    },
-    {
-      label: 'Low',
-      value: stats?.low_severity ?? 0,
-      color: COLORS.low,
-    },
-  ];
+  if (!canViewReports(user?.role)) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.state}>
+          <ScreenState
+            icon="lock-closed-outline"
+            title="Reports aren’t available for this account."
+            message="Your classroom alerts and history are still available from the main navigation."
+            actionLabel="Go to home"
+            onAction={() => router.replace('/')}
+          />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <ScrollView
         style={styles.screen}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
-      >
-        {/* Header */}
-        <Text style={styles.title}>Analytics</Text>
-
-        {/* Error */}
-        {error && (
-          <View style={styles.errorRow}>
-            <Ionicons name="alert-circle-outline" size={16} color={COLORS.high} />
-            <Text style={styles.errorText}>{error}</Text>
-            <TouchableOpacity onPress={load}>
-              <Text style={styles.retryText}>Retry</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Summary Row */}
-        <View style={styles.summaryRow}>
-          {summaryItems.map(({ label, value, color }) => (
-            <View key={label} style={styles.summaryItem}>
-              <Text style={[styles.summaryValue, { color }]}>{value}</Text>
-              <Text style={styles.summaryLabel}>{label}</Text>
-            </View>
-          ))}
-        </View>
-
-        {/* Bar Chart Card */}
-        <View style={styles.chartCard}>
-          <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
-          <Text style={styles.chartTitle}>Alerts by Severity</Text>
-          <BarChart
-            data={chartData}
-            width={CHART_WIDTH}
-            height={200}
-            chartConfig={chartConfig}
-            style={styles.chart}
-            showValuesOnTopOfBars
-            withInnerLines={false}
-            fromZero
-            yAxisLabel=""
-            yAxisSuffix=""
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => load(true)}
+            tintColor={COLORS.primary}
+            colors={[COLORS.primary]}
           />
+        }
+      >
+        <View style={styles.header}>
+          <Text accessibilityRole="header" style={styles.title}>
+            Reports
+          </Text>
+          <Text style={styles.subtitle}>
+            A summary of the available alert history.
+          </Text>
         </View>
 
-        {/* Distribution Card */}
-        <View style={styles.chartCard}>
-          <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
-          <Text style={styles.chartTitle}>Severity Distribution</Text>
-          <View style={styles.distributionList}>
-            {distributionItems.map(({ label, value, color }) => {
-              const pct = total > 0 ? value / total : 0;
-              return (
-                <View key={label} style={styles.progressRow}>
-                  <View style={styles.progressHeader}>
-                    <Text style={[styles.progressLabel, { color }]}>{label}</Text>
-                    <Text style={[styles.progressPct, { color }]}>
-                      {Math.round(pct * 100)}%
-                    </Text>
-                  </View>
-                  <View style={styles.progressTrack}>
-                    <View
-                      style={[
-                        styles.progressFill,
-                        {
-                          width: `${Math.round(pct * 100)}%`,
-                          backgroundColor: color,
+        {error && !stats ? (
+          <ScreenState
+            icon="cloud-offline-outline"
+            title="We couldn’t load alert reports."
+            message="Check your connection and try again."
+            actionLabel="Try again"
+            onAction={() => load()}
+            tone="error"
+          />
+        ) : (
+          <>
+            {error ? (
+              <View style={styles.inlineError} accessibilityRole="alert">
+                <Ionicons
+                  name="cloud-offline-outline"
+                  size={20}
+                  color={COLORS.danger}
+                  importantForAccessibility="no-hide-descendants"
+                />
+                <Text style={styles.inlineErrorText}>
+                  This summary may be out of date.
+                </Text>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Try loading reports again"
+                  style={styles.retryButton}
+                  onPress={() => load()}
+                >
+                  <Text style={styles.retryText}>Try again</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+
+            <View style={styles.summaryGrid}>
+              <StatCard
+                label="All alerts"
+                value={total}
+                color={COLORS.primary}
+                icon="documents-outline"
+              />
+              <StatCard
+                label="High priority"
+                value={stats?.high_severity ?? 0}
+                color={COLORS.danger}
+                icon="alert-circle-outline"
+              />
+              <StatCard
+                label="Medium priority"
+                value={stats?.medium_severity ?? 0}
+                color={COLORS.warning}
+                icon="warning-outline"
+              />
+              <StatCard
+                label="Low priority"
+                value={stats?.low_severity ?? 0}
+                color={COLORS.information}
+                icon="information-circle-outline"
+              />
+            </View>
+
+            <View style={styles.chartCard}>
+              <Text accessibilityRole="header" style={styles.chartTitle}>
+                Alerts by priority
+              </Text>
+              <Text style={styles.chartDescription}>
+                Counts reflect the current history summary from EchoSense.
+              </Text>
+              {total > 0 ? (
+                <View
+                  accessible
+                  accessibilityRole="image"
+                  accessibilityLabel={`Alert counts by priority. High ${
+                    stats?.high_severity ?? 0
+                  }, medium ${stats?.medium_severity ?? 0}, low ${
+                    stats?.low_severity ?? 0
+                  }.`}
+                >
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.chartScroll}
+                    importantForAccessibility="no-hide-descendants"
+                  >
+                    <BarChart
+                      data={chartData}
+                      width={chartWidth}
+                      height={220}
+                      chartConfig={{
+                        backgroundColor: COLORS.surface,
+                        backgroundGradientFrom: COLORS.surface,
+                        backgroundGradientTo: COLORS.surface,
+                        decimalPlaces: 0,
+                        color: () => COLORS.primary,
+                        labelColor: () => COLORS.textSecondary,
+                        propsForBackgroundLines: {
+                          stroke: COLORS.border,
+                          strokeDasharray: '',
                         },
-                      ]}
+                      }}
+                      style={styles.chart}
+                      showValuesOnTopOfBars
+                      withInnerLines
+                      fromZero
+                      yAxisLabel=""
+                      yAxisSuffix=""
                     />
-                  </View>
+                  </ScrollView>
                 </View>
-              );
-            })}
-          </View>
-        </View>
-
-        {/* Empty state when no data */}
-        {total === 0 && !error && (
-          <View style={styles.emptyNote}>
-            <Ionicons name="analytics-outline" size={20} color={COLORS.textDim} />
-            <Text style={styles.emptyText}>
-              No detection data yet. Charts will populate as alerts come in.
-            </Text>
-          </View>
+              ) : (
+                <ScreenState
+                  icon="bar-chart-outline"
+                  title="No alert history is available yet."
+                  message="This report will update when alerts are available."
+                />
+              )}
+            </View>
+          </>
         )}
-
-        <View style={{ height: 24 }} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -197,122 +250,93 @@ const styles = StyleSheet.create({
   },
   screen: {
     flex: 1,
-    backgroundColor: COLORS.background,
   },
   content: {
-    paddingHorizontal: 16,
-    paddingTop: 20,
+    width: '100%',
+    maxWidth: 760,
+    alignSelf: 'center',
+    padding: SPACING.lg,
+    paddingTop: SPACING.xl,
+    paddingBottom: SPACING.xxxl,
+    gap: SPACING.lg,
+  },
+  header: {
+    gap: SPACING.xs,
   },
   title: {
-    fontSize: 24,
-    fontWeight: '800',
     color: COLORS.text,
-    letterSpacing: -0.4,
-    marginBottom: 16,
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 16,
-    backgroundColor: COLORS.card,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: COLORS.cardBorder,
-    paddingVertical: 16,
-  },
-  summaryItem: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 4,
-  },
-  summaryValue: {
-    fontSize: 24,
+    fontSize: TYPOGRAPHY.screenTitle,
     fontWeight: '800',
+    letterSpacing: -0.5,
   },
-  summaryLabel: {
-    fontSize: 11,
-    color: COLORS.textMuted,
-    fontWeight: '500',
+  subtitle: {
+    color: COLORS.textSecondary,
+    fontSize: TYPOGRAPHY.secondary,
+    lineHeight: 21,
   },
-  chartCard: {
-    borderRadius: 20,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: COLORS.cardBorder,
-    backgroundColor: COLORS.card,
-    padding: 20,
-    marginBottom: 16,
-  },
-  chartTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginBottom: 16,
-  },
-  chart: {
-    borderRadius: 12,
-    marginLeft: -20,
-  },
-  distributionList: {
-    gap: 16,
-  },
-  progressRow: {
-    gap: 6,
-  },
-  progressHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  progressLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  progressPct: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  progressTrack: {
-    height: 8,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 4,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: 4,
-    minWidth: 4,
-  },
-  emptyNote: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: COLORS.card,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: COLORS.cardBorder,
-    padding: 14,
-    marginBottom: 8,
-  },
-  emptyText: {
-    color: COLORS.textDim,
-    fontSize: 13,
+  state: {
     flex: 1,
+    justifyContent: 'center',
+    padding: SPACING.lg,
   },
-  errorRow: {
+  inlineError: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginBottom: 12,
+    gap: SPACING.sm,
+    padding: SPACING.md,
+    borderRadius: RADII.md,
+    borderWidth: 1,
+    borderColor: COLORS.dangerBorder,
+    backgroundColor: COLORS.offlineBackground,
   },
-  errorText: {
-    color: COLORS.textMuted,
-    fontSize: 13,
+  inlineErrorText: {
     flex: 1,
+    color: COLORS.textSecondary,
+    fontSize: TYPOGRAPHY.secondary,
+  },
+  retryButton: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: SPACING.sm,
   },
   retryText: {
-    color: COLORS.accent,
+    color: COLORS.primary,
+    fontSize: TYPOGRAPHY.secondary,
     fontWeight: '700',
-    fontSize: 13,
+  },
+  summaryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: SPACING.md,
+  },
+  chartCard: {
+    overflow: 'hidden',
+    padding: SPACING.md,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: RADII.lg,
+    gap: SPACING.xs,
+  },
+  chartTitle: {
+    color: COLORS.text,
+    fontSize: TYPOGRAPHY.cardTitle,
+    fontWeight: '700',
+    paddingHorizontal: SPACING.xs,
+    paddingTop: SPACING.xs,
+  },
+  chartDescription: {
+    color: COLORS.textSecondary,
+    fontSize: TYPOGRAPHY.caption,
+    lineHeight: 19,
+    paddingHorizontal: SPACING.xs,
+  },
+  chartScroll: {
+    minWidth: '100%',
+    justifyContent: 'center',
+  },
+  chart: {
+    borderRadius: RADII.md,
+    marginTop: SPACING.sm,
   },
 });

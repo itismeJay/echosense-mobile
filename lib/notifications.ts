@@ -2,6 +2,7 @@ import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
+import { extractAlertId, NotificationDeduper } from './notificationDedup';
 
 const PROJECT_ID =
   Constants.easConfig?.projectId ??
@@ -9,6 +10,8 @@ const PROJECT_ID =
   '4a4a3316-a896-4f42-bc76-ca4b833e5909';
 
 const isExpoGo = Constants.executionEnvironment === 'storeClient';
+const receivedNotificationDeduper = new NotificationDeduper();
+const responseNotificationDeduper = new NotificationDeduper();
 
 export interface NotifPrefs {
   medium: boolean;
@@ -35,12 +38,14 @@ export async function saveNotifPrefs(prefs: NotifPrefs): Promise<void> {
 
 export async function registerForPushNotifications(): Promise<string | null> {
   if (!Device.isDevice) {
-    console.log('[Push] skipped — not a physical device');
+    if (__DEV__) console.info('[Push] Registration requires a physical device.');
     return null;
   }
 
   if (isExpoGo) {
-    console.log('[Push] skipped — Expo Go removed remote push support in SDK 53. Use a dev build.');
+    if (__DEV__) {
+      console.info('[Push] Remote push registration requires a development build.');
+    }
     return null;
   }
 
@@ -51,17 +56,36 @@ export async function registerForPushNotifications(): Promise<string | null> {
       : (await Notifications.requestPermissionsAsync()).status;
 
   if (finalStatus !== 'granted') {
-    console.log('[Push] permission denied:', finalStatus);
+    if (__DEV__) console.info('[Push] Notification permission was not granted.');
     return null;
   }
 
   try {
-    console.log('[Push] requesting token with projectId:', PROJECT_ID);
     const { data } = await Notifications.getExpoPushTokenAsync({ projectId: PROJECT_ID });
-    console.log('[Push] token received:', data);
+    if (__DEV__) console.info('[Push] Notification registration succeeded.');
     return data;
-  } catch (err) {
-    console.error('[Push] getExpoPushTokenAsync failed:', err);
+  } catch {
+    if (__DEV__) console.warn('[Push] Notification registration failed.');
     return null;
   }
+}
+
+export function shouldPresentNotification(
+  data: Record<string, unknown> | null | undefined,
+  now = Date.now()
+): boolean {
+  return receivedNotificationDeduper.shouldHandle(extractAlertId(data), now);
+}
+
+export function shouldHandleNotificationResponse(
+  data: Record<string, unknown> | null | undefined,
+  now = Date.now()
+): boolean {
+  return responseNotificationDeduper.shouldHandle(extractAlertId(data), now);
+}
+
+export function getNotificationAlertId(
+  data: Record<string, unknown> | null | undefined
+): string | null {
+  return extractAlertId(data);
 }

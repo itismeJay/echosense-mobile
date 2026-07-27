@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { API_BASE_URL } from './constants';
 import { getToken, logout } from './auth';
 import type { Alert, LogStats, Severity } from './types';
+import { normalizeSeverity as normalizeAlertSeverity } from './presentation';
 
 const client = axios.create({
   baseURL: API_BASE_URL,
@@ -44,6 +45,21 @@ export async function fetchStats(): Promise<LogStats> {
   return data;
 }
 
+export async function fetchAvailableAlert(id: number): Promise<Alert | null> {
+  const results = await Promise.allSettled([fetchAlerts(), fetchLogs()]);
+  const availableAlerts = results.flatMap((result) =>
+    result.status === 'fulfilled' ? result.value : []
+  );
+
+  if (results.every((result) => result.status === 'rejected')) {
+    throw results[0].status === 'rejected'
+      ? results[0].reason
+      : new Error('Unable to load alert');
+  }
+
+  return availableAlerts.find((alert) => alert.id === id) ?? null;
+}
+
 export async function postAlert(
   payload: Omit<Alert, 'id' | 'created_at'>
 ): Promise<Alert> {
@@ -65,9 +81,7 @@ export async function checkConnectivity(): Promise<boolean> {
 }
 
 export function normalizeSeverity(raw: string): Severity {
-  const s = (raw ?? '').toLowerCase();
-  if (s === 'high' || s === 'medium' || s === 'low') return s;
-  return 'low';
+  return normalizeAlertSeverity(raw);
 }
 
 export function formatConfidence(confidence: number): string {
@@ -77,21 +91,17 @@ export function formatConfidence(confidence: number): string {
 }
 
 export function formatTimestamp(iso: string): string {
-  if (!iso) return '—';
-  try {
-    const date = new Date(iso);
-    const time = date.toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true,
-    });
-    const day = date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    });
-    return `${time} — ${day}`;
-  } catch {
-    return iso;
-  }
+  const date = new Date(iso);
+  if (!iso || Number.isNaN(date.getTime())) return '—';
+  const time = date.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+  const day = date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+  return `${time} · ${day}`;
 }

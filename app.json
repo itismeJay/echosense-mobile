@@ -1,24 +1,26 @@
 {
   "expo": {
-    "name": "echosense-mobile",
+    "name": "EchoSense",
     "slug": "echosense-mobile",
+    "scheme": "echosense",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0a0a0f"
+      "backgroundColor": "#F6F8FB"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.echosense.app"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0a0a0f"
+        "backgroundColor": "#F6F8FB"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
@@ -26,13 +28,27 @@
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.VIBRATE",
         "android.permission.RECEIVE_BOOT_COMPLETED"
-      ]
+      ],
+      "package": "com.echosense.app"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "notification": {
-      "sounds": ["./assets/sounds/water_drop.wav"]
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "sounds": [
+            "./assets/sounds/water_drop.wav"
+          ]
+        }
+      ],
+      "expo-font"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "4a4a3316-a896-4f42-bc76-ca4b833e5909"
+      }
     }
   }
 }

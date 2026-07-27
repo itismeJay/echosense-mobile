@@ -2,128 +2,195 @@ import '../global.css';
 import { Tabs, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect, useState, createContext, useMemo } from 'react';
+import React, {
+  createContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import { Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { COLORS } from '../lib/constants';
-import { getToken, wakeup } from '../lib/auth';
+import { getToken, getUser, wakeup, type User } from '../lib/auth';
+import { canViewReports } from '../lib/presentation';
+import {
+  getNotifPrefs,
+  getNotificationAlertId,
+  shouldHandleNotificationResponse,
+  shouldPresentNotification,
+} from '../lib/notifications';
+import LoadingScreen from '../components/LoadingScreen';
 
 const isExpoGo = Constants.executionEnvironment === 'storeClient';
 
-export const AuthContext = createContext<{
+interface AuthContextValue {
   isAuthenticated: boolean;
-  onSignIn: () => void;
+  user: User | null;
+  onSignIn: (user: User) => void;
   onSignOut: () => void;
-}>({
+}
+
+export const AuthContext = createContext<AuthContextValue>({
   isAuthenticated: false,
+  user: null,
   onSignIn: () => {},
   onSignOut: () => {},
 });
 
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+  handleNotification: async (notification) => {
+    const data = notification.request.content.data;
+    const shouldPresent = shouldPresentNotification(data);
+    const rawPriority = data?.priority ?? data?.severity;
+    const priority =
+      typeof rawPriority === 'string' ? rawPriority.toLowerCase() : null;
+    const isHigh = data?.isHigh === true || priority === 'high';
+    const preferences = await getNotifPrefs();
+    const priorityEnabled =
+      priority === 'medium'
+        ? preferences.medium
+        : priority === 'low'
+          ? preferences.low
+          : true;
+    const shouldShow = shouldPresent && priorityEnabled;
 
-const TAB_BAR_STYLE = {
-  backgroundColor: '#0d0d1a',
-  borderTopColor: 'rgba(255,255,255,0.08)',
-  borderTopWidth: 1,
-  height: 64,
-  paddingBottom: 10,
-  paddingTop: 6,
-} as const;
+    return {
+      shouldShowAlert: shouldShow,
+      shouldShowBanner: shouldShow,
+      shouldShowList: shouldShow,
+      shouldPlaySound: shouldShow && isHigh,
+      shouldSetBadge: false,
+    };
+  },
+});
 
 export default function RootLayout() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     wakeup();
+
     async function setup() {
       const token = await getToken();
-      setIsAuthenticated(!!token);
+      const restoredUser = token ? getUser(token) : null;
+      setUser(restoredUser);
+      setIsAuthenticated(Boolean(token));
       setAuthChecked(true);
+
       if (!token) {
         router.replace('/login');
       }
 
-      if (!isExpoGo) {
-        const { status } = await Notifications.requestPermissionsAsync();
-        if (status === 'granted' && Platform.OS === 'android') {
-          await Notifications.deleteNotificationChannelAsync('high-alerts');
-          await Notifications.setNotificationChannelAsync('high-alerts', {
-            name: 'High Severity Alerts',
-            importance: Notifications.AndroidImportance.HIGH,
-            sound: 'default',
-            enableVibrate: true,
-            vibrationPattern: [0, 80],
-          });
-          await Notifications.deleteNotificationChannelAsync('other-alerts');
-          await Notifications.setNotificationChannelAsync('other-alerts', {
-            name: 'Other Alerts',
-            importance: Notifications.AndroidImportance.DEFAULT,
-            sound: 'default',
-            enableVibrate: false,
-          });
-        }
+      if (!isExpoGo && Platform.OS === 'android') {
+        await Notifications.setNotificationChannelAsync('high-alerts', {
+          name: 'High-priority classroom alerts',
+          importance: Notifications.AndroidImportance.HIGH,
+          sound: 'default',
+          enableVibrate: true,
+          vibrationPattern: [0, 80],
+        });
+        await Notifications.setNotificationChannelAsync('other-alerts', {
+          name: 'Other classroom alerts',
+          importance: Notifications.AndroidImportance.DEFAULT,
+          sound: null,
+          enableVibrate: false,
+        });
       }
     }
+
     setup();
 
-    const receivedSub = Notifications.addNotificationReceivedListener(() => {
-      // foreground display is governed by setNotificationHandler above
-    });
-    const responseSub = Notifications.addNotificationResponseReceivedListener(() => {
-      router.replace('/');
-    });
+    const receivedSubscription =
+      Notifications.addNotificationReceivedListener(() => {
+        // Foreground presentation and ID deduplication are handled above.
+      });
+    const responseSubscription =
+      Notifications.addNotificationResponseReceivedListener((response) => {
+        const data = response.notification.request.content.data;
+        if (!shouldHandleNotificationResponse(data)) return;
+
+        const alertId = getNotificationAlertId(data);
+        if (alertId) {
+          router.push({
+            pathname: '/alert/[id]',
+            params: { id: alertId },
+          });
+        } else {
+          router.push('/alerts');
+        }
+      });
 
     return () => {
-      receivedSub.remove();
-      responseSub.remove();
+      receivedSubscription.remove();
+      responseSubscription.remove();
     };
   }, []);
 
-  const ctx = useMemo(
+  const contextValue = useMemo<AuthContextValue>(
     () => ({
       isAuthenticated,
-      onSignIn: () => setIsAuthenticated(true),
-      onSignOut: () => setIsAuthenticated(false),
+      user,
+      onSignIn: (signedInUser) => {
+        setUser(signedInUser);
+        setIsAuthenticated(true);
+      },
+      onSignOut: () => {
+        setUser(null);
+        setIsAuthenticated(false);
+      },
     }),
-    [isAuthenticated]
+    [isAuthenticated, user]
   );
 
+  if (!authChecked) {
+    return <LoadingScreen message="Opening EchoSense…" />;
+  }
+
+  const showReports = canViewReports(user?.role);
+  const tabBarStyle = {
+    backgroundColor: COLORS.surface,
+    borderTopColor: COLORS.border,
+    borderTopWidth: 1,
+    minHeight: 60 + insets.bottom,
+    paddingTop: 6,
+    paddingBottom: Math.max(insets.bottom, 8),
+  } as const;
+
   return (
-    <AuthContext.Provider value={ctx}>
-      <StatusBar style="light" />
+    <AuthContext.Provider value={contextValue}>
+      <StatusBar style="dark" backgroundColor={COLORS.background} />
       <Tabs
         screenOptions={({ route }) => ({
           headerShown: false,
+          tabBarHideOnKeyboard: true,
           tabBarStyle:
-            route.name === 'login' || !authChecked || !isAuthenticated
+            route.name === 'login' || !isAuthenticated
               ? { display: 'none' }
-              : TAB_BAR_STYLE,
-          tabBarActiveTintColor: COLORS.accent,
-          tabBarInactiveTintColor: 'rgba(255,255,255,0.35)',
+              : tabBarStyle,
+          tabBarActiveTintColor: COLORS.primary,
+          tabBarInactiveTintColor: COLORS.textMuted,
           tabBarLabelStyle: {
-            fontSize: 11,
+            fontSize: 12,
             fontWeight: '600',
+          },
+          tabBarItemStyle: {
+            minHeight: 52,
           },
         })}
       >
         <Tabs.Screen
           name="index"
           options={{
-            title: 'Dashboard',
+            title: 'Home',
+            tabBarAccessibilityLabel: 'Home tab',
             tabBarIcon: ({ color, size, focused }) => (
               <Ionicons
-                name={focused ? 'pulse' : 'pulse-outline'}
+                name={focused ? 'home' : 'home-outline'}
                 size={size}
                 color={color}
               />
@@ -131,12 +198,27 @@ export default function RootLayout() {
           }}
         />
         <Tabs.Screen
-          name="logs"
+          name="alerts"
           options={{
-            title: 'Logs',
+            title: 'Alerts',
+            tabBarAccessibilityLabel: 'Alerts tab',
             tabBarIcon: ({ color, size, focused }) => (
               <Ionicons
-                name={focused ? 'list' : 'list-outline'}
+                name={focused ? 'notifications' : 'notifications-outline'}
+                size={size}
+                color={color}
+              />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="history"
+          options={{
+            title: 'History',
+            tabBarAccessibilityLabel: 'Alert history tab',
+            tabBarIcon: ({ color, size, focused }) => (
+              <Ionicons
+                name={focused ? 'time' : 'time-outline'}
                 size={size}
                 color={color}
               />
@@ -146,7 +228,9 @@ export default function RootLayout() {
         <Tabs.Screen
           name="analytics"
           options={{
-            title: 'Analytics',
+            href: showReports ? '/analytics' : null,
+            title: 'Reports',
+            tabBarAccessibilityLabel: 'Reports tab',
             tabBarIcon: ({ color, size, focused }) => (
               <Ionicons
                 name={focused ? 'bar-chart' : 'bar-chart-outline'}
@@ -157,19 +241,23 @@ export default function RootLayout() {
           }}
         />
         <Tabs.Screen
-          name="settings"
+          name="profile"
           options={{
-            title: 'Settings',
+            title: 'Profile',
+            tabBarAccessibilityLabel: 'Profile tab',
             tabBarIcon: ({ color, size, focused }) => (
               <Ionicons
-                name={focused ? 'settings' : 'settings-outline'}
+                name={focused ? 'person-circle' : 'person-circle-outline'}
                 size={size}
                 color={color}
               />
             ),
           }}
         />
+        <Tabs.Screen name="logs" options={{ href: null }} />
+        <Tabs.Screen name="settings" options={{ href: null }} />
         <Tabs.Screen name="login" options={{ href: null }} />
+        <Tabs.Screen name="alert/[id]" options={{ href: null }} />
       </Tabs>
     </AuthContext.Provider>
   );

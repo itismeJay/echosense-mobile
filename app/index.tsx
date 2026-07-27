@@ -1,118 +1,78 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
-  ScrollView,
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
   RefreshControl,
-  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import * as Notifications from 'expo-notifications';
-import Constants from 'expo-constants';
-
-const isExpoGo = Constants.executionEnvironment === 'storeClient';
-import { BlurView } from 'expo-blur';
+import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import {
-  fetchAlerts,
-  fetchStats,
-} from '../lib/api';
-import { getNotifPrefs } from '../lib/notifications';
+import { fetchAlerts } from '../lib/api';
 import {
   COLORS,
+  MAX_ALERTS_IN_MEMORY,
+  RADII,
   REFRESH_INTERVAL_MS,
-  DETECTION_RECENCY_THRESHOLD_MS,
+  SPACING,
+  TYPOGRAPHY,
 } from '../lib/constants';
-import type { Alert, LogStats } from '../lib/types';
-import StatCard from '../components/StatCard';
+import {
+  getGreeting,
+  isToday,
+  sortAlertsNewestFirst,
+} from '../lib/presentation';
+import type { Alert } from '../lib/types';
 import AlertCard from '../components/AlertCard';
-import DetectionStatus from '../components/DetectionStatus';
-import AudioVisualizer from '../components/AudioVisualizer';
 import LoadingScreen from '../components/LoadingScreen';
+import OfflineBanner from '../components/OfflineBanner';
+import ScreenState from '../components/ScreenState';
+import StatCard from '../components/StatCard';
 
-async function sendAlertNotification(alert: Alert): Promise<void> {
-  const isHigh = alert.severity === 'high';
-
-  if (!isHigh) {
-    const prefs = await getNotifPrefs();
-    if (alert.severity === 'medium' && !prefs.medium) return;
-    if (alert.severity === 'low' && !prefs.low) return;
-  }
-
-  const severityLabel = alert.severity.charAt(0).toUpperCase() + alert.severity.slice(1);
-  const content = {
-    title: 'EchoSense',
-    body: `${severityLabel} severity detected at ${alert.location}`,
-    sound: true,
-    data: { isHigh, alertId: alert.id },
-  };
-  const channelId = isHigh ? 'high-alerts' : 'other-alerts';
-
-  await Notifications.scheduleNotificationAsync({
-    content,
-    trigger: Platform.OS === 'android'
-      ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 1, channelId }
-      : null,
-  });
-
-  if (isHigh) {
-    await Notifications.scheduleNotificationAsync({
-      content,
-      trigger: Platform.OS === 'android'
-        ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 10, channelId }
-        : { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 10 },
-    });
-  }
-}
-
-export default function Dashboard() {
+export default function HomeScreen() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [stats, setStats] = useState<LogStats | null>(null);
-  const [online, setOnline] = useState(true);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [slowLoad, setSlowLoad] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const seenAlertIds = useRef<Set<number>>(new Set());
+  const [error, setError] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const inFlight = useRef(false);
   const isFirstLoad = useRef(true);
   const slowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async (showRefresh = false) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     if (showRefresh) setRefreshing(true);
-    if (!showRefresh && isFirstLoad.current) {
+    if (isFirstLoad.current) {
       slowTimer.current = setTimeout(() => setSlowLoad(true), 6000);
     }
+
     try {
-      const [alertsData, statsData] = await Promise.all([
-        fetchAlerts(),
-        fetchStats(),
-      ]);
-
-      if (isFirstLoad.current) {
-        alertsData.forEach((a) => seenAlertIds.current.add(a.id));
-        isFirstLoad.current = false;
-      } else {
-        const newAlerts = alertsData.filter((a) => !seenAlertIds.current.has(a.id));
-        alertsData.forEach((a) => seenAlertIds.current.add(a.id));
-        for (const alert of newAlerts) {
-          await sendAlertNotification(alert);
-        }
-      }
-
-      setAlerts(alertsData);
-      setStats(statsData);
-      setOnline(true);
-      setError(null);
+      const data = await fetchAlerts();
+      const newestFirst = sortAlertsNewestFirst(data).slice(
+        0,
+        MAX_ALERTS_IN_MEMORY
+      );
+      setAlerts(newestFirst);
+      setLastUpdated(new Date());
+      setError(false);
     } catch {
-      setError('Failed to load data. Check your connection.');
-      setOnline(false);
+      setError(true);
     } finally {
       if (slowTimer.current) {
         clearTimeout(slowTimer.current);
         slowTimer.current = null;
       }
+      inFlight.current = false;
+      isFirstLoad.current = false;
       setSlowLoad(false);
       setLoading(false);
       setRefreshing(false);
@@ -121,26 +81,45 @@ export default function Dashboard() {
 
   useEffect(() => {
     load();
-    const interval = setInterval(() => load(), REFRESH_INTERVAL_MS);
-    return () => clearInterval(interval);
+    const interval = setInterval(load, REFRESH_INTERVAL_MS);
+    return () => {
+      clearInterval(interval);
+      if (slowTimer.current) clearTimeout(slowTimer.current);
+    };
   }, [load]);
 
-  const latestAlert = alerts[0] ?? null;
-  const isDetected = latestAlert
-    ? Date.now() - new Date(latestAlert.created_at).getTime() <
-      DETECTION_RECENCY_THRESHOLD_MS
-    : false;
+  const todayAlerts = useMemo(
+    () => alerts.filter((alert) => isToday(alert.created_at)),
+    [alerts]
+  );
+  const highPriorityToday = useMemo(
+    () =>
+      todayAlerts.filter(
+        (alert) => alert.severity?.toLowerCase() === 'high'
+      ).length,
+    [todayAlerts]
+  );
+  const recentAlerts = alerts.slice(0, 3);
+  const todayLabel = new Date().toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  });
 
   if (loading) {
     return (
       <LoadingScreen
-        message={slowLoad ? 'Server is waking up, please wait...' : 'Connecting to EchoSense...'}
+        message={
+          slowLoad
+            ? 'EchoSense is taking a little longer to respond…'
+            : 'Loading classroom alerts…'
+        }
       />
     );
   }
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <ScrollView
         style={styles.screen}
         contentContainerStyle={styles.content}
@@ -149,100 +128,124 @@ export default function Dashboard() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={() => load(true)}
-            tintColor={COLORS.accent}
+            tintColor={COLORS.primary}
+            colors={[COLORS.primary]}
           />
         }
       >
-        {/* Header */}
         <View style={styles.header}>
-          <Text style={styles.title}>EchoSense</Text>
-          <View style={styles.onlineRow}>
+          <Text style={styles.brand}>EchoSense</Text>
+          <Text accessibilityRole="header" style={styles.title}>
+            {getGreeting()}
+          </Text>
+          <Text style={styles.subtitle}>What needs your attention today?</Text>
+          <Text style={styles.date}>{todayLabel}</Text>
+        </View>
+
+        {error && alerts.length > 0 ? (
+          <OfflineBanner lastUpdated={lastUpdated} />
+        ) : null}
+
+        {error && alerts.length === 0 ? (
+          <ScreenState
+            icon="cloud-offline-outline"
+            title="We couldn’t load classroom alerts."
+            message="Check your connection and try again."
+            actionLabel="Try again"
+            onAction={() => load()}
+            tone="error"
+          />
+        ) : (
+          <>
+            <View style={styles.statsRow}>
+              <StatCard
+                label="Alerts today"
+                value={todayAlerts.length}
+                color={COLORS.primary}
+                icon="notifications-outline"
+              />
+              <StatCard
+                label="High priority"
+                value={highPriorityToday}
+                color={COLORS.danger}
+                icon="alert-circle-outline"
+              />
+            </View>
+
             <View
               style={[
-                styles.dot,
-                { backgroundColor: online ? COLORS.low : COLORS.high },
+                styles.monitoringCard,
+                error && styles.monitoringCardOffline,
               ]}
-            />
-            <Text
-              style={[
-                styles.onlineLabel,
-                { color: online ? COLORS.low : COLORS.high },
-              ]}
+              accessible
+              accessibilityLabel={
+                error
+                  ? 'Classroom monitoring status unavailable. EchoSense cannot connect right now.'
+                  : 'Device check-in unavailable. EchoSense cannot confirm the classroom device latest check-in from this app.'
+              }
             >
-              {online ? 'Online' : 'Offline'}
-            </Text>
-          </View>
-        </View>
+              <View
+                style={[
+                  styles.monitoringIcon,
+                  error && styles.monitoringIconOffline,
+                ]}
+              >
+                <Ionicons
+                  name={error ? 'cloud-offline-outline' : 'hardware-chip-outline'}
+                  size={24}
+                  color={error ? COLORS.danger : COLORS.information}
+                  importantForAccessibility="no-hide-descendants"
+                />
+              </View>
+              <View style={styles.monitoringCopy}>
+                <Text style={styles.monitoringEyebrow}>Classroom monitoring</Text>
+                <Text style={styles.monitoringTitle}>
+                  {error
+                    ? 'Monitoring status unavailable'
+                    : 'Device check-in unavailable'}
+                </Text>
+                <Text style={styles.monitoringMessage}>
+                  {error
+                    ? 'EchoSense can’t connect right now. Alerts may be delayed or unavailable.'
+                    : 'The current mobile service does not provide a recent classroom device check-in.'}
+                </Text>
+              </View>
+            </View>
 
-        {/* Detection Status */}
-        <DetectionStatus detected={isDetected} />
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionTitleGroup}>
+                <Text accessibilityRole="header" style={styles.sectionTitle}>
+                  Recent alerts
+                </Text>
+                <Text style={styles.sectionSubtitle}>
+                  Latest available classroom information
+                </Text>
+              </View>
+            </View>
 
-        {/* Audio Visualizer Card */}
-        <View style={styles.vizCard}>
-          <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
-          <Text style={styles.cardLabel}>Audio Activity</Text>
-          <AudioVisualizer active={isDetected} />
-        </View>
-
-        {/* Stats Grid */}
-        {stats && (
-          <View style={styles.statsGrid}>
-            <StatCard
-              label="Total Detections"
-              value={stats.total_alerts}
-              color={COLORS.accent}
-              icon="analytics"
-            />
-            <StatCard
-              label="High Severity"
-              value={stats.high_severity}
-              color={COLORS.high}
-              icon="alert-circle"
-            />
-            <StatCard
-              label="Medium Severity"
-              value={stats.medium_severity}
-              color={COLORS.medium}
-              icon="warning"
-            />
-            <StatCard
-              label="Low Severity"
-              value={stats.low_severity}
-              color={COLORS.low}
-              icon="information-circle"
-            />
-          </View>
+            {recentAlerts.length > 0 ? (
+              recentAlerts.map((alert) => (
+                <AlertCard
+                  key={alert.id}
+                  alert={alert}
+                  compact
+                  onPress={() =>
+                    router.push({
+                      pathname: '/alert/[id]',
+                      params: { id: String(alert.id) },
+                    })
+                  }
+                />
+              ))
+            ) : (
+              <ScreenState
+                icon="checkmark-circle-outline"
+                title="No new classroom alerts."
+                message="New possible alerts will appear here when information is available."
+              />
+            )}
+          </>
         )}
-
-        {/* Latest Detection */}
-        {latestAlert && (
-          <View style={styles.section}>
-            <Text style={styles.sectionLabel}>Latest Detection</Text>
-            <AlertCard alert={latestAlert} />
-          </View>
-        )}
-
-        {/* Error State */}
-        {error && (
-          <View style={styles.errorBox}>
-            <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
-            <Ionicons
-              name="cloud-offline-outline"
-              size={28}
-              color={COLORS.high}
-            />
-            <Text style={styles.errorText}>{error}</Text>
-            <TouchableOpacity
-              style={styles.retryBtn}
-              onPress={() => load()}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.retryText}>Retry</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        <View style={styles.bottomPad} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -255,102 +258,105 @@ const styles = StyleSheet.create({
   },
   screen: {
     flex: 1,
-    backgroundColor: COLORS.background,
   },
   content: {
-    paddingHorizontal: 16,
-    paddingTop: 20,
+    width: '100%',
+    maxWidth: 760,
+    alignSelf: 'center',
+    paddingHorizontal: SPACING.lg,
+    paddingTop: SPACING.xl,
+    paddingBottom: SPACING.xxxl,
+    gap: SPACING.lg,
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 4,
+    gap: SPACING.xs,
+    marginBottom: SPACING.xs,
+  },
+  brand: {
+    color: COLORS.primary,
+    fontSize: TYPOGRAPHY.secondary,
+    fontWeight: '700',
   },
   title: {
-    fontSize: 28,
+    color: COLORS.text,
+    fontSize: TYPOGRAPHY.screenTitle,
     fontWeight: '800',
-    color: COLORS.accent,
     letterSpacing: -0.5,
+    lineHeight: 34,
   },
-  onlineRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
+  subtitle: {
+    color: COLORS.text,
+    fontSize: TYPOGRAPHY.body,
+    lineHeight: 23,
   },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+  date: {
+    color: COLORS.textSecondary,
+    fontSize: TYPOGRAPHY.secondary,
+    lineHeight: 20,
   },
-  onlineLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  vizCard: {
-    borderRadius: 16,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: COLORS.cardBorder,
-    backgroundColor: COLORS.card,
-    paddingVertical: 20,
-    paddingHorizontal: 12,
-    marginBottom: 8,
-    gap: 12,
-  },
-  cardLabel: {
-    color: COLORS.textMuted,
-    fontSize: 12,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  statsGrid: {
+  statsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginHorizontal: -4,
-    marginVertical: 8,
+    gap: SPACING.md,
   },
-  section: {
-    marginTop: 8,
-  },
-  sectionLabel: {
-    color: COLORS.textMuted,
-    fontSize: 12,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginBottom: 6,
-  },
-  errorBox: {
-    borderRadius: 16,
-    overflow: 'hidden',
+  monitoringCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: SPACING.md,
+    padding: SPACING.lg,
+    backgroundColor: COLORS.surface,
     borderWidth: 1,
-    borderColor: `${COLORS.high}44`,
-    backgroundColor: `${COLORS.high}11`,
-    padding: 20,
-    marginTop: 12,
+    borderColor: COLORS.border,
+    borderRadius: RADII.lg,
+  },
+  monitoringCardOffline: {
+    backgroundColor: COLORS.offlineBackground,
+    borderColor: COLORS.dangerBorder,
+  },
+  monitoringIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
     alignItems: 'center',
-    gap: 10,
+    justifyContent: 'center',
+    backgroundColor: COLORS.informationBackground,
   },
-  errorText: {
-    color: COLORS.textMuted,
-    fontSize: 14,
-    textAlign: 'center',
+  monitoringIconOffline: {
+    backgroundColor: COLORS.dangerBackground,
   },
-  retryBtn: {
-    backgroundColor: COLORS.accent,
-    paddingHorizontal: 24,
-    paddingVertical: 10,
-    borderRadius: 20,
-    marginTop: 4,
+  monitoringCopy: {
+    flex: 1,
+    gap: SPACING.xs,
   },
-  retryText: {
+  monitoringEyebrow: {
+    color: COLORS.textSecondary,
+    fontSize: TYPOGRAPHY.caption,
+    fontWeight: '600',
+  },
+  monitoringTitle: {
     color: COLORS.text,
+    fontSize: TYPOGRAPHY.cardTitle,
     fontWeight: '700',
-    fontSize: 14,
+    lineHeight: 23,
   },
-  bottomPad: {
-    height: 20,
+  monitoringMessage: {
+    color: COLORS.textSecondary,
+    fontSize: TYPOGRAPHY.secondary,
+    lineHeight: 21,
+  },
+  sectionHeader: {
+    marginTop: SPACING.sm,
+  },
+  sectionTitleGroup: {
+    gap: SPACING.xs,
+  },
+  sectionTitle: {
+    color: COLORS.text,
+    fontSize: TYPOGRAPHY.sectionTitle,
+    fontWeight: '700',
+  },
+  sectionSubtitle: {
+    color: COLORS.textSecondary,
+    fontSize: TYPOGRAPHY.secondary,
   },
 });
