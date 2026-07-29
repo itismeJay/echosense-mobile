@@ -93,18 +93,9 @@ export function buildAlertNotificationCopy(alert: Alert): {
   title: string;
   body: string;
 } {
-  const priority = normalizeSeverity(alert.severity);
-  const priorityLabel =
-    priority === 'high'
-      ? 'High-priority'
-      : priority === 'medium'
-        ? 'Medium-priority'
-        : 'Low-priority';
-  const location = alert.location?.trim() || 'the classroom';
-
   return {
-    title: 'EchoSense Classroom Alert',
-    body: `${priorityLabel} alert in ${location}. Open EchoSense to view the available information.`,
+    title: 'Possible aggression alert',
+    body: 'Unverified possible-aggression alert. Human review required.',
   };
 }
 

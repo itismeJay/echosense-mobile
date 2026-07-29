@@ -4,11 +4,11 @@ export function extractAlertId(
   data: Record<string, unknown> | null | undefined
 ): string | null {
   const value = data?.alertId ?? data?.alert_id;
-  if (typeof value === 'number' && Number.isFinite(value)) {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
     return String(value);
   }
-  if (typeof value === 'string' && value.trim()) {
-    return value.trim();
+  if (typeof value === 'string' && /^[1-9]\d*$/.test(value.trim())) {
+    return String(Number(value.trim()));
   }
   return null;
 }

@@ -3,6 +3,7 @@ import axios from 'axios';
 import { API_BASE_URL } from './constants';
 
 const TOKEN_KEY = 'echosense_token';
+const sessionInvalidationListeners = new Set<() => void>();
 
 export interface User {
   id: string;
@@ -11,7 +12,7 @@ export interface User {
 }
 
 export function wakeup(): void {
-  axios.get(`${API_BASE_URL}/alerts`, { timeout: 90_000 }).catch(() => {});
+  axios.get(`${API_BASE_URL}/health`, { timeout: 90_000 }).catch(() => {});
 }
 
 export async function login(email: string, password: string): Promise<User> {
@@ -26,6 +27,7 @@ export async function login(email: string, password: string): Promise<User> {
 
 export async function logout(): Promise<void> {
   await SecureStore.deleteItemAsync(TOKEN_KEY);
+  for (const listener of sessionInvalidationListeners) listener();
 }
 
 export async function getToken(): Promise<string | null> {
@@ -38,6 +40,12 @@ export function getUser(token: string): User | null {
     const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
     const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
     const decoded = JSON.parse(atob(padded));
+    if (
+      typeof decoded.exp !== 'number' ||
+      decoded.exp * 1000 <= Date.now()
+    ) {
+      return null;
+    }
     return {
       id: String(decoded.sub ?? decoded.id ?? ''),
       email: decoded.email ?? '',
@@ -46,4 +54,39 @@ export function getUser(token: string): User | null {
   } catch {
     return null;
   }
+}
+
+export async function restoreSession(): Promise<User | null> {
+  const token = await getToken();
+  if (!token) return null;
+
+  const decodedUser = getUser(token);
+  if (!decodedUser) {
+    await logout();
+    return null;
+  }
+
+  try {
+    const { data } = await axios.get<User>(`${API_BASE_URL}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: 20_000,
+    });
+    return data;
+  } catch (caught: unknown) {
+    const status =
+      axios.isAxiosError(caught) ? caught.response?.status : undefined;
+    if (status === 401 || status === 403) {
+      await logout();
+      return null;
+    }
+    // A valid, unexpired stored session remains usable during a transient outage.
+    return decodedUser;
+  }
+}
+
+export function subscribeToSessionInvalidation(
+  listener: () => void
+): () => void {
+  sessionInvalidationListeners.add(listener);
+  return () => sessionInvalidationListeners.delete(listener);
 }

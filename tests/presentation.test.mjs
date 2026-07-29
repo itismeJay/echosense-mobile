@@ -44,8 +44,11 @@ test('teacher-facing explanations avoid definitive claims', () => {
 
 test('notification copy is calm and excludes transcript content', () => {
   const copy = buildAlertNotificationCopy(alert);
-  assert.equal(copy.title, 'EchoSense Classroom Alert');
-  assert.match(copy.body, /High-priority alert in Grade 6 – Section A/);
+  assert.equal(copy.title, 'Possible aggression alert');
+  assert.equal(
+    copy.body,
+    'Unverified possible-aggression alert. Human review required.'
+  );
   assert.doesNotMatch(copy.body, /Sensitive phrase/);
   assert.doesNotMatch(copy.body, /aggression detected|bullying/i);
 });

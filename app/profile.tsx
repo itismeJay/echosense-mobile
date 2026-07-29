@@ -20,7 +20,11 @@ import {
   SPACING,
   TYPOGRAPHY,
 } from '../lib/constants';
-import { getNotifPrefs, saveNotifPrefs } from '../lib/notifications';
+import {
+  clearPushRegistration,
+  getNotifPrefs,
+  saveNotifPrefs,
+} from '../lib/notifications';
 import { getRoleLabel } from '../lib/presentation';
 import { AuthContext } from './_layout';
 
@@ -64,9 +68,17 @@ export default function ProfileScreen() {
           text: 'Sign out',
           style: 'destructive',
           onPress: async () => {
-            await logout();
-            onSignOut();
-            router.replace('/login');
+            try {
+              await clearPushRegistration();
+              await logout();
+              onSignOut();
+              router.replace('/login');
+            } catch {
+              Alert.alert(
+                'Couldn’t sign out safely',
+                'EchoSense could not detach this device from the current account. Check your connection and try again.'
+              );
+            }
           },
         },
       ]

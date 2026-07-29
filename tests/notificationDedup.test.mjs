@@ -10,6 +10,10 @@ test('alert IDs are read from current common payload keys', () => {
   assert.equal(extractAlertId({ alert_id: ' 14 ' }), '14');
   assert.equal(extractAlertId({ id: 15 }), null);
   assert.equal(extractAlertId({ alertId: '' }), null);
+  assert.equal(extractAlertId({ alertId: 'not-an-id' }), null);
+  assert.equal(extractAlertId({ alertId: -2 }), null);
+  assert.equal(extractAlertId({ alertId: 1.5 }), null);
+  assert.equal(extractAlertId(null), null);
 });
 
 test('duplicate notifications for one alert ID are ignored within the window', () => {

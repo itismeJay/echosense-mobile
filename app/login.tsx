@@ -6,6 +6,7 @@ import React, {
 } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -18,11 +19,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as SecureStore from 'expo-secure-store';
 import { COLORS, RADII, SPACING, TYPOGRAPHY } from '../lib/constants';
 import { login, wakeup } from '../lib/auth';
-import { postPushToken } from '../lib/api';
-import { registerForPushNotifications } from '../lib/notifications';
+import { syncPushRegistration } from '../lib/notifications';
+import type { PushRegistrationResult } from '../lib/pushRegistration';
 import { AuthContext } from './_layout';
 
 export default function LoginScreen() {
@@ -43,16 +43,30 @@ export default function LoginScreen() {
     };
   }, []);
 
-  async function syncPushRegistration() {
-    const pushToken = await registerForPushNotifications();
-    if (!pushToken) return;
-
-    try {
-      await postPushToken(pushToken);
-      await SecureStore.setItemAsync('push_token', pushToken);
-      if (__DEV__) console.info('[Push] Registration saved successfully.');
-    } catch {
-      if (__DEV__) console.warn('[Push] Registration could not be saved.');
+  function explainPushResult(result: PushRegistrationResult) {
+    if (result.status === 'permission-denied') {
+      Alert.alert(
+        'Notifications are off',
+        'You can still review alerts in EchoSense. To receive new alert notifications, allow notifications in your device settings.'
+      );
+    } else if (result.status === 'physical-device-required') {
+      Alert.alert(
+        'Physical device required',
+        'Remote alert notifications cannot be registered on a simulator or emulator. Sign in on the approved physical test device.'
+      );
+    } else if (result.status === 'unsupported-build') {
+      Alert.alert(
+        'Development build required',
+        'Remote alert notifications are unavailable in Expo Go. Install the approved development or production build on a physical device.'
+      );
+    } else if (
+      result.status === 'token-unavailable' ||
+      result.status === 'registration-failed'
+    ) {
+      Alert.alert(
+        'Notification setup incomplete',
+        'Sign-in succeeded, but this device could not register for remote alerts. Check your connection and reopen EchoSense to retry.'
+      );
     }
   }
 
@@ -69,9 +83,10 @@ export default function LoginScreen() {
 
     try {
       const signedInUser = await login(email.trim(), password);
-      await syncPushRegistration();
+      const pushResult = await syncPushRegistration(signedInUser.id);
       onSignIn(signedInUser);
       router.replace('/');
+      explainPushResult(pushResult);
     } catch (caught: unknown) {
       const status =
         typeof caught === 'object' &&

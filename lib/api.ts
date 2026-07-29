@@ -46,18 +46,15 @@ export async function fetchStats(): Promise<LogStats> {
 }
 
 export async function fetchAvailableAlert(id: number): Promise<Alert | null> {
-  const results = await Promise.allSettled([fetchAlerts(), fetchLogs()]);
-  const availableAlerts = results.flatMap((result) =>
-    result.status === 'fulfilled' ? result.value : []
-  );
-
-  if (results.every((result) => result.status === 'rejected')) {
-    throw results[0].status === 'rejected'
-      ? results[0].reason
-      : new Error('Unable to load alert');
+  try {
+    const { data } = await client.get<Alert>(`/alerts/${id}`);
+    return data;
+  } catch (caught: unknown) {
+    if (axios.isAxiosError(caught) && caught.response?.status === 404) {
+      return null;
+    }
+    throw caught;
   }
-
-  return availableAlerts.find((alert) => alert.id === id) ?? null;
 }
 
 export async function postAlert(
@@ -68,7 +65,18 @@ export async function postAlert(
 }
 
 export async function postPushToken(token: string): Promise<void> {
+  const authToken = await getToken();
+  if (!authToken) throw new Error('Authentication required');
   await client.post('/users/push-token', { token });
+}
+
+export async function clearPushToken(): Promise<void> {
+  const authToken = await getToken();
+  if (!authToken) throw new Error('Authentication required');
+  // The current backend stores one nullable string per user and exposes no
+  // delete route. An empty value detaches this device and is treated as
+  // unavailable by controlled-recipient validation.
+  await client.post('/users/push-token', { token: '' });
 }
 
 export async function checkConnectivity(): Promise<boolean> {

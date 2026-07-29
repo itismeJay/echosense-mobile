@@ -4,7 +4,6 @@ import React, {
   useCallback,
   useContext,
   useEffect,
-  useMemo,
   useState,
 } from 'react';
 import {
@@ -30,6 +29,14 @@ import {
   humanizeStatus,
 } from '../../lib/presentation';
 import type { Alert } from '../../lib/types';
+import {
+  EVIDENCE_REVIEW_NOTE,
+  getExactTranscript,
+  getLanguageLabel,
+  getMatchedTermLabels,
+  getYamnetExplanation,
+  HUMAN_REVIEW_WORDING,
+} from '../../lib/alertEvidence';
 import LoadingScreen from '../../components/LoadingScreen';
 import ScreenState from '../../components/ScreenState';
 import SeverityBadge from '../../components/SeverityBadge';
@@ -69,13 +76,6 @@ export default function AlertDetailScreen() {
   useEffect(() => {
     load();
   }, [load]);
-
-  const possiblePhrase = useMemo(() => {
-    if (!alert) return null;
-    if (alert.transcribed_text?.trim()) return alert.transcribed_text.trim();
-    if (alert.detected_words?.length) return alert.detected_words.join(', ');
-    return null;
-  }, [alert]);
 
   function goBack() {
     if (router.canGoBack()) {
@@ -140,6 +140,7 @@ export default function AlertDetailScreen() {
             <Text accessibilityRole="header" style={styles.title}>
               Possible aggression alert
             </Text>
+            <Text style={styles.requiredNotice}>{HUMAN_REVIEW_WORDING}</Text>
             <Text style={styles.explanation}>
               {getAlertExplanation(alert.severity)}
             </Text>
@@ -173,6 +174,18 @@ export default function AlertDetailScreen() {
               label="Alert status"
               value={humanizeStatus(alert.status)}
             />
+            <View style={styles.divider} />
+            <DetailRow
+              icon="language-outline"
+              label="Transcript language"
+              value={getLanguageLabel(alert.language)}
+            />
+            <View style={styles.divider} />
+            <DetailRow
+              icon="finger-print-outline"
+              label="Evidence event ID"
+              value={alert.event_id || 'Not available for this legacy alert'}
+            />
             {alert.emotion?.trim() ? (
               <>
                 <View style={styles.divider} />
@@ -187,10 +200,14 @@ export default function AlertDetailScreen() {
 
           <View style={styles.card}>
             <Text accessibilityRole="header" style={styles.sectionTitle}>
-              Possible detected phrase
+              Stored transcript
             </Text>
-            <Text style={possiblePhrase ? styles.phrase : styles.unavailable}>
-              {possiblePhrase || 'No automatic transcription is available.'}
+            <Text
+              selectable
+              style={getExactTranscript(alert) ? styles.phrase : styles.unavailable}
+            >
+              {getExactTranscript(alert) ||
+                'No stored transcript is available for this alert.'}
             </Text>
             <View
               style={styles.transcriptionNotice}
@@ -204,11 +221,29 @@ export default function AlertDetailScreen() {
                 importantForAccessibility="no-hide-descendants"
               />
               <Text style={styles.noticeText}>
-                Automatic transcription may be inaccurate, especially with
-                overlapping voices or background noise. Use it only as supporting
-                information and verify the classroom situation before acting.
+                {EVIDENCE_REVIEW_NOTE}
               </Text>
             </View>
+          </View>
+
+          <View style={styles.card}>
+            <Text accessibilityRole="header" style={styles.sectionTitle}>
+              Evidence indicators
+            </Text>
+            <DetailRow
+              icon="list-outline"
+              label="Matched monitored terms"
+              value={
+                getMatchedTermLabels(alert).join(', ') ||
+                'No matched monitored terms were stored.'
+              }
+            />
+            <View style={styles.divider} />
+            <DetailRow
+              icon="pulse-outline"
+              label="Acoustic classification"
+              value={getYamnetExplanation(alert.yamnet_ran)}
+            />
           </View>
 
           <View style={styles.automaticNotice}>
@@ -219,8 +254,7 @@ export default function AlertDetailScreen() {
               importantForAccessibility="no-hide-descendants"
             />
             <Text style={styles.automaticNoticeText}>
-              EchoSense generated this possible classroom alert automatically.
-              The available information has not been independently verified.
+              {HUMAN_REVIEW_WORDING} {EVIDENCE_REVIEW_NOTE}
             </Text>
           </View>
 
@@ -338,7 +372,7 @@ function TechnicalDetails({
   );
 }
 
-function formatMetric(value: number | undefined): string {
+function formatMetric(value: number | null | undefined): string {
   return typeof value === 'number' && Number.isFinite(value)
     ? value.toFixed(4)
     : 'Not available';
@@ -405,6 +439,12 @@ const styles = StyleSheet.create({
   explanation: {
     color: COLORS.textSecondary,
     fontSize: TYPOGRAPHY.body,
+    lineHeight: 24,
+  },
+  requiredNotice: {
+    color: COLORS.danger,
+    fontSize: TYPOGRAPHY.body,
+    fontWeight: '700',
     lineHeight: 24,
   },
   card: {

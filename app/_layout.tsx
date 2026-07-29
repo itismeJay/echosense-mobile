@@ -1,5 +1,5 @@
 import '../global.css';
-import { Tabs, router } from 'expo-router';
+import { Tabs, router, useRootNavigationState } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import React, {
@@ -13,17 +13,32 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { COLORS } from '../lib/constants';
-import { getToken, getUser, wakeup, type User } from '../lib/auth';
+import {
+  restoreSession,
+  subscribeToSessionInvalidation,
+  wakeup,
+  type User,
+} from '../lib/auth';
 import { canViewReports } from '../lib/presentation';
 import {
   getNotifPrefs,
   getNotificationAlertId,
+  getPendingAlertId,
+  clearPendingAlertId,
   shouldHandleNotificationResponse,
   shouldPresentNotification,
+  storePendingAlertId,
+  syncPushRegistration,
 } from '../lib/notifications';
 import LoadingScreen from '../components/LoadingScreen';
+import { createNotificationListenerManager } from '../lib/notificationListeners';
 
 const isExpoGo = Constants.executionEnvironment === 'storeClient';
+const notificationListenerManager =
+  createNotificationListenerManager<
+    Notifications.Notification,
+    Notifications.NotificationResponse
+  >();
 
 interface AuthContextValue {
   isAuthenticated: boolean;
@@ -70,20 +85,40 @@ export default function RootLayout() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [user, setUser] = useState<User | null>(null);
+  const [pendingAlertId, setPendingAlertId] = useState<string | null>(null);
   const insets = useSafeAreaInsets();
+  const navigationState = useRootNavigationState();
 
   useEffect(() => {
     wakeup();
+    let active = true;
+
+    async function queueResponse(
+      response: Notifications.NotificationResponse
+    ) {
+      const data = response.notification.request.content.data;
+      if (!shouldHandleNotificationResponse(data)) return;
+      const alertId = getNotificationAlertId(data);
+      if (!alertId) return;
+      await storePendingAlertId(alertId);
+      if (active) setPendingAlertId(alertId);
+    }
 
     async function setup() {
-      const token = await getToken();
-      const restoredUser = token ? getUser(token) : null;
+      const [restoredUser, storedAlertId] = await Promise.all([
+        restoreSession(),
+        getPendingAlertId(),
+      ]);
+      if (!active) return;
       setUser(restoredUser);
-      setIsAuthenticated(Boolean(token));
+      setIsAuthenticated(Boolean(restoredUser));
+      setPendingAlertId(storedAlertId);
       setAuthChecked(true);
 
-      if (!token) {
+      if (!restoredUser) {
         router.replace('/login');
+      } else {
+        void syncPushRegistration(restoredUser.id);
       }
 
       if (!isExpoGo && Platform.OS === 'android') {
@@ -101,35 +136,65 @@ export default function RootLayout() {
           enableVibrate: false,
         });
       }
+
+      try {
+        const lastResponse =
+          await Notifications.getLastNotificationResponseAsync();
+        if (lastResponse) await queueResponse(lastResponse);
+        await Notifications.clearLastNotificationResponseAsync();
+      } catch {
+        // Notification response APIs can be unavailable on unsupported runtimes.
+      }
     }
 
     setup();
 
-    const receivedSubscription =
-      Notifications.addNotificationReceivedListener(() => {
+    const stopNotificationListeners = notificationListenerManager.start(
+      {
+        addReceivedListener: Notifications.addNotificationReceivedListener,
+        addResponseListener:
+          Notifications.addNotificationResponseReceivedListener,
+      },
+      () => {
         // Foreground presentation and ID deduplication are handled above.
-      });
-    const responseSubscription =
-      Notifications.addNotificationResponseReceivedListener((response) => {
-        const data = response.notification.request.content.data;
-        if (!shouldHandleNotificationResponse(data)) return;
-
-        const alertId = getNotificationAlertId(data);
-        if (alertId) {
-          router.push({
-            pathname: '/alert/[id]',
-            params: { id: alertId },
-          });
-        } else {
-          router.push('/alerts');
-        }
-      });
+      },
+      (response) => {
+        void queueResponse(response);
+      }
+    );
+    const unsubscribeSession = subscribeToSessionInvalidation(() => {
+      if (!active) return;
+      setUser(null);
+      setIsAuthenticated(false);
+      router.replace('/login');
+    });
 
     return () => {
-      receivedSubscription.remove();
-      responseSubscription.remove();
+      active = false;
+      stopNotificationListeners();
+      unsubscribeSession();
     };
   }, []);
+
+  useEffect(() => {
+    if (!authChecked || !navigationState?.key || !pendingAlertId) return;
+    if (!isAuthenticated) {
+      router.replace('/login');
+      return;
+    }
+
+    router.push({
+      pathname: '/alert/[id]',
+      params: { id: pendingAlertId },
+    });
+    setPendingAlertId(null);
+    void clearPendingAlertId();
+  }, [
+    authChecked,
+    isAuthenticated,
+    navigationState?.key,
+    pendingAlertId,
+  ]);
 
   const contextValue = useMemo<AuthContextValue>(
     () => ({

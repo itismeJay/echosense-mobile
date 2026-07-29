@@ -63,6 +63,60 @@ test('push tokens and notification payloads are not printed', async () => {
   const source = `${login}\n${notifications}`;
   assert.doesNotMatch(source, /console\.(?:log|info|warn|error)\([^)]*(?:pushToken|data|PROJECT_ID)/);
   assert.doesNotMatch(source, /token received|push token:/i);
+  assert.doesNotMatch(source, /console\.(?:log|info|warn|error)\([^)]*token/i);
+});
+
+test('push registration and logout use the authenticated existing backend route', async () => {
+  const api = await read('lib/api.ts');
+  const notifications = await read('lib/notifications.ts');
+  const profile = await read('app/profile.tsx');
+  assert.match(api, /client\.post\('\/users\/push-token', \{ token \}\)/);
+  assert.match(api, /Authentication required/);
+  assert.match(profile, /await clearPushRegistration\(\);\s+await logout\(\);/);
+  assert.match(notifications, /PUSH_REGISTRATION_KEY/);
+});
+
+test('notification navigation persists authenticated targets and handles cold starts', async () => {
+  const layout = await read('app/_layout.tsx');
+  assert.match(layout, /getLastNotificationResponseAsync/);
+  assert.match(layout, /clearLastNotificationResponseAsync/);
+  assert.match(layout, /storePendingAlertId/);
+  assert.match(layout, /if \(!isAuthenticated\)/);
+  assert.match(layout, /pathname: '\/alert\/\[id\]'/);
+  assert.match(layout, /navigationState\?\.key/);
+});
+
+test('alert detail renders the backend evidence contract and review wording', async () => {
+  const details = [
+    await read('app/alert/[id].tsx'),
+    await read('lib/alertEvidence.ts'),
+    await read('lib/types.ts'),
+  ].join('\n');
+  for (const field of [
+    'transcribed_text',
+    'language',
+    'severity',
+    'created_at',
+    'matched_terms',
+    'event_id',
+    'yamnet_ran',
+  ]) {
+    assert.match(details, new RegExp(field));
+  }
+  assert.match(details, /HUMAN_REVIEW_WORDING/);
+  assert.match(details, /EVIDENCE_REVIEW_NOTE/);
+});
+
+test('user-facing alert wording never claims confirmed bullying', async () => {
+  const source = [
+    ...(await sourceFiles('app')),
+    ...(await sourceFiles('components')),
+    ...(await sourceFiles('lib')),
+  ];
+  const contents = (
+    await Promise.all(source.map(async (file) => await read(file)))
+  ).join('\n');
+  assert.doesNotMatch(contents, /confirmed bullying|bullying detected|establishes guilt/i);
 });
 
 test('teacher screens include loading, empty, error, and offline wording', async () => {
