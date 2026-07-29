@@ -27,12 +27,11 @@ import {
 import { canViewReports } from '../lib/presentation';
 import {
   getNotifPrefs,
-  getNotificationAlertId,
-  getPendingAlertId,
-  clearPendingAlertId,
+  getPendingNotificationIntent,
+  clearPendingNotificationIntent,
   shouldHandleNotificationResponse,
   shouldPresentNotification,
-  storePendingAlertId,
+  storePendingNotificationIntent,
   syncPushRegistration,
 } from '../lib/notifications';
 import LoadingScreen from '../components/LoadingScreen';
@@ -40,11 +39,12 @@ import { createNotificationListenerManager } from '../lib/notificationListeners'
 import {
   ANDROID_NOTIFICATION_CHANNELS,
 } from '../lib/notificationChannels';
+import { parseNotificationEnvelope } from '../lib/notificationPayload';
 import {
-  getNotificationSeverity,
-  isExpectedNotificationCopy,
-} from '../lib/notificationPayload';
-import { resolvePendingAlertAction } from '../lib/notificationNavigation';
+  createPendingNotificationIntent,
+  resolvePendingNotificationAction,
+  type PendingNotificationIntent,
+} from '../lib/notificationNavigation';
 
 const isExpoGo = Constants.executionEnvironment === 'storeClient';
 const STARTUP_RESTORE_TIMEOUT_MS = 25_000;
@@ -56,20 +56,20 @@ const notificationListenerManager =
 
 async function restoreStartupState(): Promise<{
   restoredUser: User | null;
-  storedAlertId: string | null;
+  pendingIntent: PendingNotificationIntent | null;
 }> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const fallback = {
     restoredUser: null,
-    storedAlertId: null,
+    pendingIntent: null,
   };
 
   try {
     return await Promise.race([
-      Promise.all([restoreSession(), getPendingAlertId()])
-        .then(([restoredUser, storedAlertId]) => ({
+      Promise.all([restoreSession(), getPendingNotificationIntent()])
+        .then(([restoredUser, pendingIntent]) => ({
           restoredUser,
-          storedAlertId,
+          pendingIntent,
         }))
         .catch(() => fallback),
       new Promise<typeof fallback>((resolve) => {
@@ -103,18 +103,24 @@ export const AuthContext = createContext<AuthContextValue>({
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
     const { data, title, body } = notification.request.content;
-    const priority = getNotificationSeverity(data);
-    const shouldPresent =
-      isExpectedNotificationCopy(title, body, priority) &&
-      shouldPresentNotification(data);
-    const isHigh = priority === 'high';
+    const parsed = parseNotificationEnvelope(data, title, body);
+    const priority = parsed?.severity ?? 'unknown';
+    const shouldPresent = shouldPresentNotification(
+      data,
+      title,
+      body
+    );
+    const isHigh =
+      parsed?.type === 'classroom_alert' && priority === 'high';
     const preferences = await getNotifPrefs();
     const priorityEnabled =
-      priority === 'medium'
-        ? preferences.medium
-        : priority === 'low'
-          ? preferences.low
-          : true;
+      parsed?.type === 'provider_test'
+        ? true
+        : priority === 'medium'
+          ? preferences.medium
+          : priority === 'low'
+            ? preferences.low
+            : true;
     const shouldShow = shouldPresent && priorityEnabled;
 
     return {
@@ -131,7 +137,8 @@ export default function RootLayout() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [user, setUser] = useState<User | null>(null);
-  const [pendingAlertId, setPendingAlertId] = useState<string | null>(null);
+  const [pendingIntent, setPendingIntent] =
+    useState<PendingNotificationIntent | null>(null);
   const insets = useSafeAreaInsets();
   const navigationState = useRootNavigationState();
   const pathname = usePathname();
@@ -143,20 +150,27 @@ export default function RootLayout() {
     async function queueResponse(
       response: Notifications.NotificationResponse
     ) {
-      const data = response.notification.request.content.data;
-      if (!shouldHandleNotificationResponse(data)) return;
-      const alertId = getNotificationAlertId(data);
-      if (!alertId) return;
-      await storePendingAlertId(alertId);
-      if (active) setPendingAlertId(alertId);
+      const { data, title, body } =
+        response.notification.request.content;
+      if (!shouldHandleNotificationResponse(data, title, body)) return;
+      const parsed = parseNotificationEnvelope(data, title, body);
+      if (!parsed) return;
+      const intent = createPendingNotificationIntent(
+        parsed,
+        new Date().toISOString()
+      );
+      if (!intent) return;
+      await storePendingNotificationIntent(intent);
+      if (active) setPendingIntent(intent);
     }
 
     async function setup() {
-      const { restoredUser, storedAlertId } = await startupStatePromise;
+      const { restoredUser, pendingIntent: storedIntent } =
+        await startupStatePromise;
       if (!active) return;
       setUser(restoredUser);
       setIsAuthenticated(Boolean(restoredUser));
-      setPendingAlertId(storedAlertId);
+      setPendingIntent(storedIntent);
       setAuthChecked(true);
 
       if (restoredUser) {
@@ -224,36 +238,51 @@ export default function RootLayout() {
 
     if (!isAuthenticated && pathname !== '/login') {
       router.replace('/login');
-    } else if (isAuthenticated && pathname === '/login') {
+    } else if (
+      isAuthenticated &&
+      pathname === '/login' &&
+      !pendingIntent
+    ) {
       router.replace('/');
     }
   }, [
     authChecked,
     isAuthenticated,
     navigationState?.key,
+    pendingIntent,
     pathname,
   ]);
 
   useEffect(() => {
-    const action = resolvePendingAlertAction({
+    const action = resolvePendingNotificationAction({
       authChecked,
       navigationReady: Boolean(navigationState?.key),
       isAuthenticated,
-      pendingAlertId,
+      pendingIntent,
     });
-    if (action.type !== 'navigate') return;
-
-    router.push({
-      pathname: '/alert/[id]',
-      params: { id: action.alertId },
-    });
-    setPendingAlertId(null);
-    void clearPendingAlertId();
+    if (action.type === 'navigate-alert') {
+      router.push({
+        pathname: '/alert/[id]',
+        params: { id: action.alertId },
+      });
+    } else if (action.type === 'navigate-provider-test') {
+      router.push({
+        pathname: '/notifications/test',
+        params: {
+          testId: action.testId,
+          receivedAt: action.receivedAt,
+        },
+      });
+    } else {
+      return;
+    }
+    setPendingIntent(null);
+    void clearPendingNotificationIntent();
   }, [
     authChecked,
     isAuthenticated,
     navigationState?.key,
-    pendingAlertId,
+    pendingIntent,
   ]);
 
   const contextValue = useMemo<AuthContextValue>(
@@ -267,7 +296,7 @@ export default function RootLayout() {
       onSignOut: () => {
         setUser(null);
         setIsAuthenticated(false);
-        setPendingAlertId(null);
+        setPendingIntent(null);
       },
     }),
     [isAuthenticated, user]
@@ -385,6 +414,7 @@ export default function RootLayout() {
         <Tabs.Screen name="settings" options={{ href: null }} />
         <Tabs.Screen name="login" options={{ href: null }} />
         <Tabs.Screen name="alert/[id]" options={{ href: null }} />
+        <Tabs.Screen name="notifications/test" options={{ href: null }} />
       </Tabs>
     </AuthContext.Provider>
   );

@@ -80,11 +80,42 @@ test('notification navigation persists authenticated targets and handles cold st
   const layout = await read('app/_layout.tsx');
   assert.match(layout, /getLastNotificationResponseAsync/);
   assert.match(layout, /clearLastNotificationResponseAsync/);
-  assert.match(layout, /storePendingAlertId/);
-  assert.match(layout, /resolvePendingAlertAction/);
-  assert.match(layout, /action\.type !== 'navigate'/);
+  assert.match(layout, /storePendingNotificationIntent/);
+  assert.match(layout, /resolvePendingNotificationAction/);
+  assert.match(layout, /action\.type === 'navigate-alert'/);
   assert.match(layout, /pathname: '\/alert\/\[id\]'/);
+  assert.match(layout, /action\.type === 'navigate-provider-test'/);
+  assert.match(layout, /pathname: '\/notifications\/test'/);
   assert.match(layout, /navigationState\?\.key/);
+});
+
+test('provider-test route is authenticated and contains no classroom detail UI', async () => {
+  const screen = await read('app/notifications/test.tsx');
+  assert.match(screen, /if \(!isAuthenticated\)/);
+  assert.match(screen, /<Redirect href="\/login" \/>/);
+  assert.match(screen, /Notification test received/);
+  assert.match(screen, /No classroom alert was created/);
+  assert.doesNotMatch(
+    screen,
+    /SeverityBadge|severity_evidence|Stored transcript|matched terms|YAMNet/i
+  );
+  assert.doesNotMatch(
+    screen,
+    /push.?token|auth.?token|user\.email|classroom room|student/i
+  );
+});
+
+test('provider-test validation uses exact copy and an allowlisted route', async () => {
+  const payload = await read('lib/notificationPayload.ts');
+  assert.match(payload, /PROVIDER_TEST_TITLE = 'EchoSense notification test'/);
+  assert.match(
+    payload,
+    /No classroom alert was created/
+  );
+  assert.match(payload, /PROVIDER_TEST_ROUTE = '\/notifications\/test'/);
+  assert.match(payload, /hasOnlyKeys\(data, PROVIDER_TEST_KEYS\)/);
+  assert.match(payload, /data\.is_test !== true/);
+  assert.match(payload, /data\.severity !== 'LOW'/);
 });
 
 test('alert detail renders the backend evidence contract and review wording', async () => {

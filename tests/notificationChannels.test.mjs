@@ -4,6 +4,7 @@ import {
   ANDROID_ALERT_CHANNEL_ID,
   ANDROID_HIGH_ALERT_CHANNEL_ID,
   ANDROID_NOTIFICATION_CHANNELS,
+  getAndroidNotificationChannelId,
 } from '../lib/notificationChannels.ts';
 
 test('Android uses two stable responsible notification channels', () => {
@@ -22,4 +23,31 @@ test('Android uses two stable responsible notification channels', () => {
     assert.match(channel.description, /human review/i);
     assert.doesNotMatch(channel.description, /emergency|confirmed danger/i);
   }
+});
+
+test('provider tests always use the normal channel, never the HIGH channel', () => {
+  const providerTest = {
+    type: 'provider_test',
+    testId: 'safe-test-id',
+    route: '/notifications/test',
+    severity: 'low',
+    isTest: true,
+  };
+  assert.equal(
+    getAndroidNotificationChannelId(providerTest),
+    ANDROID_ALERT_CHANNEL_ID
+  );
+  assert.notEqual(
+    getAndroidNotificationChannelId(providerTest),
+    ANDROID_HIGH_ALERT_CHANNEL_ID
+  );
+  assert.equal(
+    getAndroidNotificationChannelId({
+      type: 'classroom_alert',
+      alertId: '42',
+      eventId: null,
+      severity: 'high',
+    }),
+    ANDROID_HIGH_ALERT_CHANNEL_ID
+  );
 });

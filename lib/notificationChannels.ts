@@ -1,3 +1,5 @@
+import type { SafeNotificationData } from './notificationPayload';
+
 export const ANDROID_ALERT_CHANNEL_ID = 'echosense-alerts';
 export const ANDROID_HIGH_ALERT_CHANNEL_ID = 'echosense-high-alerts';
 
@@ -21,3 +23,11 @@ export const ANDROID_NOTIFICATION_CHANNELS = [
     enableVibrate: true,
   },
 ] as const;
+
+export function getAndroidNotificationChannelId(
+  data: SafeNotificationData
+): typeof ANDROID_ALERT_CHANNEL_ID | typeof ANDROID_HIGH_ALERT_CHANNEL_ID {
+  return data.type === 'classroom_alert' && data.severity === 'high'
+    ? ANDROID_HIGH_ALERT_CHANNEL_ID
+    : ANDROID_ALERT_CHANNEL_ID;
+}

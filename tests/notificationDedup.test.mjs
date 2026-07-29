@@ -34,3 +34,11 @@ test('payloads without alert IDs remain deliverable', () => {
   assert.equal(deduper.shouldHandle(null, 1000), true);
   assert.equal(deduper.shouldHandle(null, 1001), true);
 });
+
+test('namespaced provider-test and classroom identities do not collide', () => {
+  const deduper = new NotificationDeduper(1000);
+  assert.equal(deduper.shouldHandle('provider_test:42', 1000), true);
+  assert.equal(deduper.shouldHandle('provider_test:42', 1100), false);
+  assert.equal(deduper.shouldHandle('classroom_alert:42', 1100), true);
+  assert.equal(deduper.shouldHandle('provider_test:43', 1100), true);
+});

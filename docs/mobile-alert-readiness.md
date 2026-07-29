@@ -134,6 +134,89 @@ also keep notification title/body privacy-safe because background and
 terminated-app notification UI is rendered by the operating system before
 application JavaScript can inspect it.
 
+## Controlled provider-test notification
+
+The mobile app supports one separate provider-level delivery-test contract.
+It is not parsed as a classroom alert and does not create or store an alert.
+
+The application data must contain exactly:
+
+```json
+{
+  "type": "provider_test",
+  "test_id": "safe-test-id",
+  "route": "/notifications/test",
+  "severity": "LOW",
+  "is_test": true
+}
+```
+
+The only allowed application data keys are `type`, `test_id`, `route`,
+`severity`, and `is_test`. The test ID must be a non-empty identifier of at
+most 128 characters using letters, digits, `.`, `_`, `:`, or `-`. The route,
+LOW severity, and boolean test marker must match exactly. An `alertId`, an
+unknown key, an alternate route, or a sensitive key causes the payload to be
+rejected.
+
+The only accepted provider-test copy is:
+
+- Title: `EchoSense notification test`
+- Body:
+  `This is a controlled delivery test for the approved device. No classroom alert was created.`
+
+Alternate copy is rejected for foreground presentation and tap handling.
+Valid remote wording is displayed unchanged.
+
+Known sensitive fields are rejected for both notification variants, including
+transcript, matched-term, hit-list, category, waveform, raw-audio, student,
+speaker, user-identity, accusation, credential, access-token, and push-token
+fields. Provider tests also use a strict allowlist, so differently named or
+future fields fail closed.
+
+For compatibility with the currently deployed classroom-alert sender, the
+existing allowlisted alert shape may omit `type`. It must still contain a
+positive `alertId` or `alert_id`, valid LOW/MEDIUM/HIGH severity, and only the
+known classroom notification keys. An explicit unknown `type` is never
+defaulted to a classroom alert.
+
+### Provider-test receipt and navigation
+
+- Foreground delivery uses the existing notification handler, accepts only
+  the exact contract and copy, and does not navigate automatically.
+- A foreground, background, or cold-start tap is validated before any intent
+  is stored.
+- The app stores only a typed `provider_test` intent containing the validated
+  test ID and a locally generated receipt timestamp. It does not store the
+  notification payload or a route supplied by the provider.
+- The destination is fixed in application code as `/notifications/test`.
+- If signed out or the session has expired, the intent waits at sign-in and
+  resumes only after authentication and router restoration.
+- Invalid stored state is removed and never used for navigation.
+- The test screen is authentication-aware, identifies itself as a delivery
+  test, masks the test ID, and shows only the local receipt time and platform.
+  It contains no classroom transcript, evidence, room, student, alert ID,
+  credential, or provider response.
+
+Provider tests are deduplicated by a namespaced `test_id` key. Classroom
+alerts remain deduplicated by a separately namespaced alert ID, so the two
+variants cannot collide. Received-notification and response-tap deduplication
+remain separate, allowing one notification to be presented and then opened.
+Deduplication is process-local for ten minutes and does not claim
+provider-level exactly-once delivery.
+
+On Android, provider tests use the normal `echosense-alerts` channel and never
+`echosense-high-alerts`. The channel has normal importance and its existing
+ordinary presentation policy; no repeated alarm or emergency behavior is
+added. The provider must select the same channel in the outer Android message.
+
+On iOS, provider tests use ordinary notification permission and presentation.
+They do not request or assume Critical Alerts entitlement and have no emergency
+behavior.
+
+This provider notification test verifies mobile push delivery and navigation
+only. It does not create a classroom alert and does not test microphone
+detection, transcription, severity classification, or edge outbox delivery.
+
 ## Listener lifecycle, duplicate protection, and navigation
 
 A single module-level manager owns one received listener and one response

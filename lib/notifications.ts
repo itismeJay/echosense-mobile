@@ -3,7 +3,15 @@ import * as Device from 'expo-device';
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import { extractAlertId, NotificationDeduper } from './notificationDedup';
-import { parseNotificationData } from './notificationPayload';
+import {
+  getNotificationIdentity,
+  parseNotificationData,
+  parseNotificationEnvelope,
+} from './notificationPayload';
+import {
+  parseStoredNotificationIntent,
+  type PendingNotificationIntent,
+} from './notificationNavigation';
 import { clearPushToken, postPushToken } from './api';
 import {
   runPushRegistration,
@@ -22,6 +30,7 @@ const responseNotificationDeduper = new NotificationDeduper();
 const PUSH_REGISTRATION_KEY = 'push_registration_v1';
 const LEGACY_PUSH_TOKEN_KEY = 'push_token';
 const PENDING_ALERT_KEY = 'pending_notification_alert_id';
+const PENDING_NOTIFICATION_INTENT_KEY = 'pending_notification_intent_v2';
 let pushLifecycleGeneration = 0;
 
 export interface NotifPrefs {
@@ -116,46 +125,88 @@ export async function clearPushRegistration(): Promise<void> {
     SecureStore.deleteItemAsync(PUSH_REGISTRATION_KEY),
     SecureStore.deleteItemAsync(LEGACY_PUSH_TOKEN_KEY),
     SecureStore.deleteItemAsync(PENDING_ALERT_KEY),
+    SecureStore.deleteItemAsync(PENDING_NOTIFICATION_INTENT_KEY),
   ]);
   receivedNotificationDeduper.clear();
   responseNotificationDeduper.clear();
 }
 
-export async function storePendingAlertId(alertId: string): Promise<void> {
-  await SecureStore.setItemAsync(PENDING_ALERT_KEY, alertId);
+export async function storePendingNotificationIntent(
+  intent: PendingNotificationIntent
+): Promise<void> {
+  await Promise.all([
+    SecureStore.setItemAsync(
+      PENDING_NOTIFICATION_INTENT_KEY,
+      JSON.stringify(intent)
+    ),
+    SecureStore.deleteItemAsync(PENDING_ALERT_KEY),
+  ]);
 }
 
-export async function getPendingAlertId(): Promise<string | null> {
-  const alertId = await SecureStore.getItemAsync(PENDING_ALERT_KEY);
-  return extractAlertId({ alertId });
+export async function getPendingNotificationIntent(): Promise<PendingNotificationIntent | null> {
+  const raw = await SecureStore.getItemAsync(
+    PENDING_NOTIFICATION_INTENT_KEY
+  );
+  if (raw) {
+    try {
+      const parsed = parseStoredNotificationIntent(JSON.parse(raw));
+      if (parsed) return parsed;
+    } catch {
+      // Invalid stored navigation state is removed below.
+    }
+    await SecureStore.deleteItemAsync(PENDING_NOTIFICATION_INTENT_KEY);
+  }
+
+  // Migrate an alert target stored by an earlier app version without ever
+  // interpreting it as a provider-test route.
+  const legacyAlertId = extractAlertId({
+    alertId: await SecureStore.getItemAsync(PENDING_ALERT_KEY),
+  });
+  return legacyAlertId
+    ? { type: 'classroom_alert', alertId: legacyAlertId }
+    : null;
 }
 
-export async function clearPendingAlertId(): Promise<void> {
-  await SecureStore.deleteItemAsync(PENDING_ALERT_KEY);
+export async function clearPendingNotificationIntent(): Promise<void> {
+  await Promise.all([
+    SecureStore.deleteItemAsync(PENDING_NOTIFICATION_INTENT_KEY),
+    SecureStore.deleteItemAsync(PENDING_ALERT_KEY),
+  ]);
 }
 
 export function shouldPresentNotification(
   data: Record<string, unknown> | null | undefined,
+  title: unknown,
+  body: unknown,
   now = Date.now()
 ): boolean {
-  const parsed = parseNotificationData(data);
+  const parsed = parseNotificationEnvelope(data, title, body);
   return parsed
-    ? receivedNotificationDeduper.shouldHandle(parsed.alertId, now)
+    ? receivedNotificationDeduper.shouldHandle(
+        getNotificationIdentity(parsed),
+        now
+      )
     : false;
 }
 
 export function shouldHandleNotificationResponse(
   data: Record<string, unknown> | null | undefined,
+  title: unknown,
+  body: unknown,
   now = Date.now()
 ): boolean {
-  const parsed = parseNotificationData(data);
+  const parsed = parseNotificationEnvelope(data, title, body);
   return parsed
-    ? responseNotificationDeduper.shouldHandle(parsed.alertId, now)
+    ? responseNotificationDeduper.shouldHandle(
+        getNotificationIdentity(parsed),
+        now
+      )
     : false;
 }
 
 export function getNotificationAlertId(
   data: Record<string, unknown> | null | undefined
 ): string | null {
-  return extractAlertId(data);
+  const parsed = parseNotificationData(data);
+  return parsed?.type === 'classroom_alert' ? parsed.alertId : null;
 }
