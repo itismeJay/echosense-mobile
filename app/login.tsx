@@ -17,7 +17,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
+import { Redirect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, RADII, SPACING, TYPOGRAPHY } from '../lib/constants';
 import { login, wakeup } from '../lib/auth';
@@ -26,7 +26,7 @@ import type { PushRegistrationResult } from '../lib/pushRegistration';
 import { AuthContext } from './_layout';
 
 export default function LoginScreen() {
-  const { onSignIn } = useContext(AuthContext);
+  const { isAuthenticated, onSignIn } = useContext(AuthContext);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -52,7 +52,7 @@ export default function LoginScreen() {
     } else if (result.status === 'physical-device-required') {
       Alert.alert(
         'Physical device required',
-        'Remote alert notifications cannot be registered on a simulator or emulator. Sign in on the approved physical test device.'
+        'Remote push notifications require an approved physical Android or iOS device. Alert review remains available without push registration.'
       );
     } else if (result.status === 'unsupported-build') {
       Alert.alert(
@@ -85,7 +85,6 @@ export default function LoginScreen() {
       const signedInUser = await login(email.trim(), password);
       const pushResult = await syncPushRegistration(signedInUser.id);
       onSignIn(signedInUser);
-      router.replace('/');
       explainPushResult(pushResult);
     } catch (caught: unknown) {
       const status =
@@ -111,6 +110,10 @@ export default function LoginScreen() {
       setLoading(false);
       setSlowHint(false);
     }
+  }
+
+  if (isAuthenticated) {
+    return <Redirect href="/" />;
   }
 
   return (

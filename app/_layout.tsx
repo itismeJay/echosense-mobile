@@ -1,5 +1,10 @@
 import '../global.css';
-import { Tabs, router, useRootNavigationState } from 'expo-router';
+import {
+  Tabs,
+  router,
+  usePathname,
+  useRootNavigationState,
+} from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import React, {
@@ -32,13 +37,54 @@ import {
 } from '../lib/notifications';
 import LoadingScreen from '../components/LoadingScreen';
 import { createNotificationListenerManager } from '../lib/notificationListeners';
+import {
+  ANDROID_NOTIFICATION_CHANNELS,
+} from '../lib/notificationChannels';
+import {
+  getNotificationSeverity,
+  isExpectedNotificationCopy,
+} from '../lib/notificationPayload';
+import { resolvePendingAlertAction } from '../lib/notificationNavigation';
 
 const isExpoGo = Constants.executionEnvironment === 'storeClient';
+const STARTUP_RESTORE_TIMEOUT_MS = 25_000;
 const notificationListenerManager =
   createNotificationListenerManager<
     Notifications.Notification,
     Notifications.NotificationResponse
   >();
+
+async function restoreStartupState(): Promise<{
+  restoredUser: User | null;
+  storedAlertId: string | null;
+}> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const fallback = {
+    restoredUser: null,
+    storedAlertId: null,
+  };
+
+  try {
+    return await Promise.race([
+      Promise.all([restoreSession(), getPendingAlertId()])
+        .then(([restoredUser, storedAlertId]) => ({
+          restoredUser,
+          storedAlertId,
+        }))
+        .catch(() => fallback),
+      new Promise<typeof fallback>((resolve) => {
+        timeoutId = setTimeout(
+          () => resolve(fallback),
+          STARTUP_RESTORE_TIMEOUT_MS
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+const startupStatePromise = restoreStartupState();
 
 interface AuthContextValue {
   isAuthenticated: boolean;
@@ -56,12 +102,12 @@ export const AuthContext = createContext<AuthContextValue>({
 
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
-    const data = notification.request.content.data;
-    const shouldPresent = shouldPresentNotification(data);
-    const rawPriority = data?.priority ?? data?.severity;
-    const priority =
-      typeof rawPriority === 'string' ? rawPriority.toLowerCase() : null;
-    const isHigh = data?.isHigh === true || priority === 'high';
+    const { data, title, body } = notification.request.content;
+    const priority = getNotificationSeverity(data);
+    const shouldPresent =
+      isExpectedNotificationCopy(title, body, priority) &&
+      shouldPresentNotification(data);
+    const isHigh = priority === 'high';
     const preferences = await getNotifPrefs();
     const priorityEnabled =
       priority === 'medium'
@@ -88,6 +134,7 @@ export default function RootLayout() {
   const [pendingAlertId, setPendingAlertId] = useState<string | null>(null);
   const insets = useSafeAreaInsets();
   const navigationState = useRootNavigationState();
+  const pathname = usePathname();
 
   useEffect(() => {
     wakeup();
@@ -105,36 +152,33 @@ export default function RootLayout() {
     }
 
     async function setup() {
-      const [restoredUser, storedAlertId] = await Promise.all([
-        restoreSession(),
-        getPendingAlertId(),
-      ]);
+      const { restoredUser, storedAlertId } = await startupStatePromise;
       if (!active) return;
       setUser(restoredUser);
       setIsAuthenticated(Boolean(restoredUser));
       setPendingAlertId(storedAlertId);
       setAuthChecked(true);
 
-      if (!restoredUser) {
-        router.replace('/login');
-      } else {
+      if (restoredUser) {
         void syncPushRegistration(restoredUser.id);
       }
 
       if (!isExpoGo && Platform.OS === 'android') {
-        await Notifications.setNotificationChannelAsync('high-alerts', {
-          name: 'High-priority classroom alerts',
-          importance: Notifications.AndroidImportance.HIGH,
-          sound: 'default',
-          enableVibrate: true,
-          vibrationPattern: [0, 80],
-        });
-        await Notifications.setNotificationChannelAsync('other-alerts', {
-          name: 'Other classroom alerts',
-          importance: Notifications.AndroidImportance.DEFAULT,
-          sound: null,
-          enableVibrate: false,
-        });
+        for (const channel of ANDROID_NOTIFICATION_CHANNELS) {
+          await Notifications.setNotificationChannelAsync(channel.id, {
+            name: channel.name,
+            description: channel.description,
+            importance:
+              channel.importance === 'high'
+                ? Notifications.AndroidImportance.HIGH
+                : Notifications.AndroidImportance.DEFAULT,
+            sound: channel.sound,
+            enableVibrate: channel.enableVibrate,
+            ...(channel.importance === 'high'
+              ? { vibrationPattern: [0, 80] }
+              : {}),
+          });
+        }
       }
 
       try {
@@ -166,7 +210,6 @@ export default function RootLayout() {
       if (!active) return;
       setUser(null);
       setIsAuthenticated(false);
-      router.replace('/login');
     });
 
     return () => {
@@ -177,15 +220,32 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
-    if (!authChecked || !navigationState?.key || !pendingAlertId) return;
-    if (!isAuthenticated) {
+    if (!authChecked || !navigationState?.key) return;
+
+    if (!isAuthenticated && pathname !== '/login') {
       router.replace('/login');
-      return;
+    } else if (isAuthenticated && pathname === '/login') {
+      router.replace('/');
     }
+  }, [
+    authChecked,
+    isAuthenticated,
+    navigationState?.key,
+    pathname,
+  ]);
+
+  useEffect(() => {
+    const action = resolvePendingAlertAction({
+      authChecked,
+      navigationReady: Boolean(navigationState?.key),
+      isAuthenticated,
+      pendingAlertId,
+    });
+    if (action.type !== 'navigate') return;
 
     router.push({
       pathname: '/alert/[id]',
-      params: { id: pendingAlertId },
+      params: { id: action.alertId },
     });
     setPendingAlertId(null);
     void clearPendingAlertId();
@@ -207,6 +267,7 @@ export default function RootLayout() {
       onSignOut: () => {
         setUser(null);
         setIsAuthenticated(false);
+        setPendingAlertId(null);
       },
     }),
     [isAuthenticated, user]
@@ -230,6 +291,7 @@ export default function RootLayout() {
     <AuthContext.Provider value={contextValue}>
       <StatusBar style="dark" backgroundColor={COLORS.background} />
       <Tabs
+        initialRouteName={isAuthenticated ? 'index' : 'login'}
         screenOptions={({ route }) => ({
           headerShown: false,
           tabBarHideOnKeyboard: true,

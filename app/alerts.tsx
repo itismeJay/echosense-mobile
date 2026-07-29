@@ -124,7 +124,7 @@ export default function AlertsScreen() {
             <ScreenState
               icon="cloud-offline-outline"
               title="We couldn’t load classroom alerts."
-              message="Check your connection and try again."
+              message="Check your connection and try again. Being offline in the app does not mean an alert was lost; available alerts can synchronize when connectivity returns."
               actionLabel="Try again"
               onAction={() => load()}
               tone="error"

@@ -1,9 +1,11 @@
 import axios from 'axios';
-import { router } from 'expo-router';
 import { API_BASE_URL } from './constants';
 import { getToken, logout } from './auth';
-import type { Alert, LogStats, Severity } from './types';
-import { normalizeSeverity as normalizeAlertSeverity } from './presentation';
+import type { Alert, AlertSeverity, LogStats } from './types';
+import {
+  parseAlertListResponse,
+  parseAlertResponse,
+} from './alertContract';
 
 const client = axios.create({
   baseURL: API_BASE_URL,
@@ -23,21 +25,34 @@ client.interceptors.response.use(
   (response) => response,
   async (error) => {
     if (error.response?.status === 401) {
-      await logout();
-      router.replace('/login');
+      const authorization =
+        error.config?.headers?.Authorization ??
+        error.config?.headers?.get?.('Authorization');
+      const failedToken =
+        typeof authorization === 'string' &&
+        authorization.startsWith('Bearer ')
+          ? authorization.slice('Bearer '.length)
+          : null;
+      const currentToken = await getToken();
+
+      // Ignore a delayed 401 from a request that used an older token. It must
+      // not invalidate a session created while that request was in flight.
+      if (failedToken && currentToken === failedToken) {
+        await logout();
+      }
     }
     return Promise.reject(error);
   }
 );
 
 export async function fetchAlerts(): Promise<Alert[]> {
-  const { data } = await client.get<Alert[]>('/alerts');
-  return Array.isArray(data) ? data : [];
+  const { data } = await client.get<unknown>('/alerts/');
+  return parseAlertListResponse(data, '/alerts/');
 }
 
 export async function fetchLogs(): Promise<Alert[]> {
-  const { data } = await client.get<Alert[]>('/logs');
-  return Array.isArray(data) ? data : [];
+  const { data } = await client.get<unknown>('/logs/');
+  return parseAlertListResponse(data, '/logs/');
 }
 
 export async function fetchStats(): Promise<LogStats> {
@@ -47,8 +62,8 @@ export async function fetchStats(): Promise<LogStats> {
 
 export async function fetchAvailableAlert(id: number): Promise<Alert | null> {
   try {
-    const { data } = await client.get<Alert>(`/alerts/${id}`);
-    return data;
+    const { data } = await client.get<unknown>(`/alerts/${id}`);
+    return parseAlertResponse(data, `/alerts/${id}`);
   } catch (caught: unknown) {
     if (axios.isAxiosError(caught) && caught.response?.status === 404) {
       return null;
@@ -60,7 +75,7 @@ export async function fetchAvailableAlert(id: number): Promise<Alert | null> {
 export async function postAlert(
   payload: Omit<Alert, 'id' | 'created_at'>
 ): Promise<Alert> {
-  const { data } = await client.post<Alert>('/alerts', payload);
+  const { data } = await client.post<Alert>('/alerts/', payload);
   return data;
 }
 
@@ -81,15 +96,27 @@ export async function clearPushToken(): Promise<void> {
 
 export async function checkConnectivity(): Promise<boolean> {
   try {
-    await client.get('/alerts', { timeout: 15000 });
+    await client.get('/alerts/', { timeout: 15000 });
     return true;
   } catch {
     return false;
   }
 }
 
-export function normalizeSeverity(raw: string): Severity {
-  return normalizeAlertSeverity(raw);
+export function normalizeSeverity(raw: string): AlertSeverity {
+  const severity = raw.trim().toLowerCase();
+  return severity === 'high' ||
+    severity === 'medium' ||
+    severity === 'low'
+    ? severity
+    : 'unknown';
+}
+
+export function getHttpStatus(caught: unknown): number | null {
+  return axios.isAxiosError(caught) &&
+    typeof caught.response?.status === 'number'
+    ? caught.response.status
+    : null;
 }
 
 export function formatConfidence(confidence: number): string {

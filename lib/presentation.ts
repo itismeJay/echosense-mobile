@@ -1,17 +1,35 @@
-import type { Alert, Severity } from './types';
+import type { Alert, AlertSeverity } from './types';
 
 export type AppRole = 'admin' | 'staff' | 'counselor' | string;
 
-export function normalizeSeverity(raw: string | null | undefined): Severity {
+export function normalizeSeverity(
+  raw: string | null | undefined
+): AlertSeverity {
   const severity = (raw ?? '').toLowerCase();
   if (severity === 'high' || severity === 'medium' || severity === 'low') {
     return severity;
   }
-  return 'low';
+  return 'unknown';
 }
 
 export function getPriorityLabel(raw: string | null | undefined): string {
-  return `${normalizeSeverity(raw).toUpperCase()} PRIORITY`;
+  const severity = normalizeSeverity(raw);
+  return severity === 'unknown'
+    ? 'PRIORITY UNAVAILABLE'
+    : `${severity.toUpperCase()} PRIORITY`;
+}
+
+export function getAlertTitle(raw: string | null | undefined): string {
+  switch (normalizeSeverity(raw)) {
+    case 'high':
+      return 'High-priority classroom alert';
+    case 'medium':
+      return 'Possible verbal-aggression indicators';
+    case 'low':
+      return 'Possible classroom concern';
+    default:
+      return 'Alert severity unavailable';
+  }
 }
 
 export function getAlertExplanation(raw: string | null | undefined): string {
@@ -20,8 +38,10 @@ export function getAlertExplanation(raw: string | null | undefined): string {
       return 'EchoSense noticed sounds or speech that may need prompt attention.';
     case 'medium':
       return 'EchoSense noticed sounds or speech that may need attention.';
-    default:
+    case 'low':
       return 'EchoSense recorded a possible classroom alert for your awareness.';
+    default:
+      return 'This alert still requires human review, but its stored severity value is unavailable.';
   }
 }
 
@@ -93,10 +113,28 @@ export function buildAlertNotificationCopy(alert: Alert): {
   title: string;
   body: string;
 } {
-  return {
-    title: 'Possible aggression alert',
-    body: 'Unverified possible-aggression alert. Human review required.',
-  };
+  switch (normalizeSeverity(alert.severity)) {
+    case 'high':
+      return {
+        title: 'High-priority classroom alert',
+        body: 'Strong possible-aggression indicators were detected. Prompt human review is recommended.',
+      };
+    case 'medium':
+      return {
+        title: 'Possible verbal-aggression indicators',
+        body: 'A medium-severity unverified alert requires staff review.',
+      };
+    case 'low':
+      return {
+        title: 'Possible classroom concern',
+        body: 'A low-severity unverified alert requires staff review.',
+      };
+    default:
+      return {
+        title: 'Classroom alert',
+        body: 'Unverified possible-aggression alert. Human review required.',
+      };
+  }
 }
 
 export function formatTime(iso: string): string {

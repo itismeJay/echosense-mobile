@@ -81,7 +81,8 @@ test('notification navigation persists authenticated targets and handles cold st
   assert.match(layout, /getLastNotificationResponseAsync/);
   assert.match(layout, /clearLastNotificationResponseAsync/);
   assert.match(layout, /storePendingAlertId/);
-  assert.match(layout, /if \(!isAuthenticated\)/);
+  assert.match(layout, /resolvePendingAlertAction/);
+  assert.match(layout, /action\.type !== 'navigate'/);
   assert.match(layout, /pathname: '\/alert\/\[id\]'/);
   assert.match(layout, /navigationState\?\.key/);
 });

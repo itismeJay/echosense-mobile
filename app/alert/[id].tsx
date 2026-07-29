@@ -14,7 +14,11 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { fetchAvailableAlert, formatConfidence } from '../../lib/api';
+import {
+  fetchAvailableAlert,
+  formatConfidence,
+  getHttpStatus,
+} from '../../lib/api';
 import {
   COLORS,
   RADII,
@@ -25,6 +29,7 @@ import {
   canViewTechnicalDetails,
   formatDate,
   formatTime,
+  getAlertTitle,
   getAlertExplanation,
   humanizeStatus,
 } from '../../lib/presentation';
@@ -34,8 +39,13 @@ import {
   getExactTranscript,
   getLanguageLabel,
   getMatchedTermLabels,
+  getReviewNotice,
+  getSeverityEvidenceUnavailableMessage,
   getYamnetExplanation,
   HUMAN_REVIEW_WORDING,
+  severityReasonLabel,
+  supportingEvidenceLabel,
+  termCategoryEvidenceLabel,
 } from '../../lib/alertEvidence';
 import LoadingScreen from '../../components/LoadingScreen';
 import ScreenState from '../../components/ScreenState';
@@ -48,13 +58,15 @@ export default function AlertDetailScreen() {
   const [alert, setAlert] = useState<Alert | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<
+    'network' | 'unauthorized' | 'invalid-response' | null
+  >(null);
   const [technicalExpanded, setTechnicalExpanded] = useState(false);
 
   const alertId = Number(Array.isArray(id) ? id[0] : id);
 
   const load = useCallback(async () => {
-    if (!Number.isInteger(alertId) || alertId < 0) {
+    if (!Number.isSafeInteger(alertId) || alertId <= 0) {
       setNotFound(true);
       setLoading(false);
       return;
@@ -65,9 +77,16 @@ export default function AlertDetailScreen() {
       const availableAlert = await fetchAvailableAlert(alertId);
       setAlert(availableAlert);
       setNotFound(!availableAlert);
-      setError(false);
-    } catch {
-      setError(true);
+      setError(null);
+    } catch (caught: unknown) {
+      const status = getHttpStatus(caught);
+      setError(
+        status === 401 || status === 403
+          ? 'unauthorized'
+          : caught instanceof Error && caught.name === 'AlertContractError'
+            ? 'invalid-response'
+            : 'network'
+      );
     } finally {
       setLoading(false);
     }
@@ -112,9 +131,27 @@ export default function AlertDetailScreen() {
       {error ? (
         <View style={styles.state}>
           <ScreenState
-            icon="cloud-offline-outline"
-            title="We couldn’t load this alert."
-            message="Check your connection and try again."
+            icon={
+              error === 'unauthorized'
+                ? 'lock-closed-outline'
+                : error === 'invalid-response'
+                  ? 'document-outline'
+                  : 'cloud-offline-outline'
+            }
+            title={
+              error === 'unauthorized'
+                ? 'You can’t access this alert.'
+                : error === 'invalid-response'
+                  ? 'This alert could not be displayed safely.'
+                  : 'We couldn’t load this alert.'
+            }
+            message={
+              error === 'unauthorized'
+                ? 'Sign in with an authorized staff account and try again.'
+                : error === 'invalid-response'
+                  ? 'The server returned alert information in an unexpected format. No evidence was inferred.'
+                  : 'Check your connection and try again. Being offline in the app does not mean the alert was lost; available alerts can synchronize when connectivity returns.'
+            }
             actionLabel="Try again"
             onAction={load}
             tone="error"
@@ -138,9 +175,9 @@ export default function AlertDetailScreen() {
         >
           <View style={styles.hero}>
             <Text accessibilityRole="header" style={styles.title}>
-              Possible aggression alert
+              {getAlertTitle(alert.severity)}
             </Text>
-            <Text style={styles.requiredNotice}>{HUMAN_REVIEW_WORDING}</Text>
+            <Text style={styles.requiredNotice}>{getReviewNotice(alert)}</Text>
             <Text style={styles.explanation}>
               {getAlertExplanation(alert.severity)}
             </Text>
@@ -180,6 +217,28 @@ export default function AlertDetailScreen() {
               label="Transcript language"
               value={getLanguageLabel(alert.language)}
             />
+            {typeof alert.language_confidence === 'number' ? (
+              <>
+                <View style={styles.divider} />
+                <DetailRow
+                  icon="analytics-outline"
+                  label="Language confidence"
+                  value={formatConfidence(alert.language_confidence)}
+                />
+              </>
+            ) : null}
+            <View style={styles.divider} />
+            <DetailRow
+              icon="speedometer-outline"
+              label="Detection confidence"
+              value={formatConfidence(alert.confidence)}
+            />
+            <View style={styles.divider} />
+            <DetailRow
+              icon="hourglass-outline"
+              label="Event duration"
+              value={`${alert.duration.toFixed(1)} seconds`}
+            />
             <View style={styles.divider} />
             <DetailRow
               icon="finger-print-outline"
@@ -197,6 +256,8 @@ export default function AlertDetailScreen() {
               </>
             ) : null}
           </View>
+
+          <SeverityEvidenceSection alert={alert} />
 
           <View style={styles.card}>
             <Text accessibilityRole="header" style={styles.sectionTitle}>
@@ -244,6 +305,46 @@ export default function AlertDetailScreen() {
               label="Acoustic classification"
               value={getYamnetExplanation(alert.yamnet_ran)}
             />
+            {alert.yamnet_class?.trim() ? (
+              <>
+                <View style={styles.divider} />
+                <DetailRow
+                  icon="options-outline"
+                  label="Stored YAMNet class"
+                  value={alert.yamnet_class}
+                />
+              </>
+            ) : null}
+            {typeof alert.yamnet_score === 'number' ? (
+              <>
+                <View style={styles.divider} />
+                <DetailRow
+                  icon="stats-chart-outline"
+                  label="Stored YAMNet score"
+                  value={formatConfidence(alert.yamnet_score)}
+                />
+              </>
+            ) : null}
+            <View style={styles.divider} />
+            <DetailRow
+              icon="pricetags-outline"
+              label="Stored categories"
+              value={
+                alert.categories?.length
+                  ? alert.categories.map(humanizeStatus).join(', ')
+                  : 'No categories were stored.'
+              }
+            />
+            {alert.tone?.trim() || alert.emotion?.trim() ? (
+              <>
+                <View style={styles.divider} />
+                <DetailRow
+                  icon="pulse-outline"
+                  label="Stored tone or acoustic indicator"
+                  value={alert.tone?.trim() || alert.emotion?.trim() || ''}
+                />
+              </>
+            ) : null}
           </View>
 
           <View style={styles.automaticNotice}>
@@ -268,6 +369,94 @@ export default function AlertDetailScreen() {
         </ScrollView>
       )}
     </SafeAreaView>
+  );
+}
+
+function SeverityEvidenceSection({ alert }: { alert: Alert }) {
+  const evidence = alert.severity_evidence;
+  const categories = Object.entries(evidence?.term_categories ?? {});
+  const supportingEvidence = evidence?.supporting_evidence ?? [];
+
+  return (
+    <View style={styles.card}>
+      <Text accessibilityRole="header" style={styles.sectionTitle}>
+        Why this alert was prioritized
+      </Text>
+      <Text style={styles.evidenceContext}>
+        Severity helps staff prioritize review. It does not verify aggression
+        or determine intent.
+      </Text>
+      {evidence ? (
+        <Text style={styles.recordedEvidenceLevel}>
+          Recorded evidence level: {evidence.level}
+        </Text>
+      ) : null}
+      {evidence && alert.severity_evidence_state === 'available' ? (
+        <View style={styles.evidenceBody}>
+          {evidence.reasons.length > 0 ? (
+            <EvidenceList
+              title="Primary reasons"
+              values={evidence.reasons.map(severityReasonLabel)}
+            />
+          ) : null}
+          {categories.length > 0 ? (
+            <View style={styles.evidenceGroup}>
+              <Text style={styles.evidenceHeading}>
+                Matched evidence categories
+              </Text>
+              {categories.map(([category, terms]) => (
+                <View key={category} style={styles.categoryCard}>
+                  <Text style={styles.categoryTitle}>
+                    {termCategoryEvidenceLabel(category)}
+                  </Text>
+                  {terms.map((term, index) => (
+                    <Text
+                      key={`${category}-${index}`}
+                      selectable
+                      style={styles.evidenceValue}
+                    >
+                      Matched phrase: “{term}”
+                    </Text>
+                  ))}
+                </View>
+              ))}
+            </View>
+          ) : null}
+          {supportingEvidence.length > 0 ? (
+            <EvidenceList
+              title="Supporting acoustic or context evidence"
+              values={supportingEvidence.map(supportingEvidenceLabel)}
+            />
+          ) : null}
+        </View>
+      ) : (
+        <View style={styles.evidenceUnavailable}>
+          <Text style={styles.evidenceUnavailableText}>
+            {getSeverityEvidenceUnavailableMessage(alert)}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function EvidenceList({
+  title,
+  values,
+}: {
+  title: string;
+  values: string[];
+}) {
+  return (
+    <View style={styles.evidenceGroup}>
+      <Text style={styles.evidenceHeading}>{title}</Text>
+      {values.map((value, index) => (
+        <View key={`${value}-${index}`} style={styles.bulletRow}>
+          <View style={styles.bullet} />
+          <Text style={styles.evidenceValue}>{value}</Text>
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -522,6 +711,74 @@ const styles = StyleSheet.create({
   automaticNoticeText: {
     flex: 1,
     color: COLORS.textSecondary,
+    fontSize: TYPOGRAPHY.secondary,
+    lineHeight: 21,
+  },
+  evidenceContext: {
+    color: COLORS.textSecondary,
+    fontSize: TYPOGRAPHY.secondary,
+    lineHeight: 21,
+  },
+  recordedEvidenceLevel: {
+    color: COLORS.text,
+    fontSize: TYPOGRAPHY.secondary,
+    fontWeight: '700',
+    lineHeight: 21,
+  },
+  evidenceBody: {
+    gap: SPACING.lg,
+    padding: SPACING.md,
+    borderRadius: RADII.md,
+    backgroundColor: COLORS.surfaceSecondary,
+  },
+  evidenceGroup: {
+    gap: SPACING.sm,
+  },
+  evidenceHeading: {
+    color: COLORS.text,
+    fontSize: TYPOGRAPHY.secondary,
+    fontWeight: '800',
+    lineHeight: 20,
+  },
+  bulletRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: SPACING.sm,
+  },
+  bullet: {
+    width: 6,
+    height: 6,
+    marginTop: 8,
+    borderRadius: 3,
+    backgroundColor: COLORS.primary,
+  },
+  evidenceValue: {
+    flex: 1,
+    color: COLORS.text,
+    fontSize: TYPOGRAPHY.secondary,
+    lineHeight: 21,
+  },
+  categoryCard: {
+    gap: SPACING.xs,
+    padding: SPACING.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: RADII.sm,
+    backgroundColor: COLORS.surface,
+  },
+  categoryTitle: {
+    color: COLORS.text,
+    fontSize: TYPOGRAPHY.secondary,
+    fontWeight: '700',
+    lineHeight: 20,
+  },
+  evidenceUnavailable: {
+    padding: SPACING.md,
+    borderRadius: RADII.md,
+    backgroundColor: COLORS.warningBackground,
+  },
+  evidenceUnavailableText: {
+    color: COLORS.warning,
     fontSize: TYPOGRAPHY.secondary,
     lineHeight: 21,
   },

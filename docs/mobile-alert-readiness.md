@@ -1,96 +1,294 @@
-# EchoSense mobile alert readiness
+# EchoSense mobile severity and notification readiness
 
-## Production contract
+Last updated: 2026-07-30
 
-- Backend: `https://echosense-backend-75h3.onrender.com`
-- Authentication: `POST /auth/login`, followed by bearer-authenticated
-  `GET /auth/me` for session restoration.
-- Push registration: bearer-authenticated `POST /users/push-token` with
-  `{ "token": "<Expo push token>" }`.
-- Alert detail: bearer-authenticated `GET /alerts/{alert_id}`.
-- Current push data payload: `{ "alertId": <integer>, "severity": "<value>" }`.
-  The app also accepts `alert_id` as a legacy compatibility key. It does not
-  infer `event_id`, `route`, or other fields that the backend does not send.
-- Push title: `Possible aggression alert`
-- Push body:
-  `Unverified possible-aggression alert. Human review required.`
+## Safety statement
 
-The push payload does not contain the transcript. Full stored evidence is
-loaded only after an authorized user opens the alert detail route.
+Every alert is an unverified possible-aggression alert requiring human review.
 
-## Permission and token behavior
+Severity prioritizes human review based on observable transcript and acoustic
+evidence. It does not confirm bullying, determine intent, identify a speaker,
+or establish guilt.
 
-- iOS and Android both check current permission before requesting it.
-- A request is made only while status is `undetermined`. A previous denial is
-  respected and explained without blocking alert review in the app.
-- Remote push registration is skipped safely in simulators/emulators and Expo
-  Go. A physical device with a development or production build is required.
-- The EAS project ID is resolved from runtime EAS/Expo configuration and has a
-  configured fallback matching `app.json`.
-- On every authenticated app start and successful sign-in, the app obtains the
-  current Expo push token. The same token/user pair is not posted twice.
-- A changed token or app reinstall is registered on the next authenticated
-  start. A failed registration is retried on a later start.
-- Full push tokens and authentication tokens are not printed.
+Remote push notification requires connectivity and successful delivery by the
+notification provider. Immediate notification delivery is not guaranteed.
 
-Android notification channels are created for high and other priorities.
-iOS presentation follows system permission and the app's foreground handler.
-Remote notification display while backgrounded is handled by the operating
-system; no background data-processing task or raw transcript is required.
+## Mobile alert contract
 
-## Navigation behavior
+The mobile API layer runtime-parses protected alert list, history, and detail
+responses before data reaches the UI.
 
-Notification response listeners are installed once and removed on cleanup.
-Foreground delivery is deduplicated by alert ID without scheduling a second
-local notification. Live, background, and terminated-app responses use the
-same validated positive integer alert ID.
+Supported fields are:
 
-If the router or authentication is not ready, the alert ID is held in secure
-device storage. An unauthenticated user is sent to sign-in, and the pending
-alert opens only after authentication succeeds and the root router is ready.
-Malformed or missing IDs are ignored safely. The consumed terminated-app
-response is cleared to prevent reopening it on every launch.
+- `id` (positive backend alert ID used for detail navigation)
+- `event_id` (supporting edge identity)
+- `severity` and canonical `severity_level`
+- nullable structured `severity_evidence`
+- nullable `review_notice`
+- exact `transcript` or production `transcribed_text`
+- `language` and optional `language_confidence`
+- `confidence`, `duration`, `location`, `status`, and `created_at`
+- `matched_terms`, `categories`, and optional `track`
+- `yamnet_ran`, `yamnet_class`, and `yamnet_score`
+- existing optional tone/acoustic fields
 
-## Evidence and roles
+Unknown optional response fields are ignored. Raw audio is neither copied into
+the mobile model nor processed. Required malformed response shapes fail with a
+generic safe UI message; response bodies and alert payloads are not logged.
 
-The detail screen displays the stored transcript without trimming or
-normalizing it, language, severity, timestamp, matched terms, event ID,
-`yamnet_ran` explanation, and the required human-review wording. Null legacy
-fields use explicit unavailable states. Technical metrics remain
-administrator-only.
+Valid uppercase and lowercase severity values normalize to `low`, `medium`, or
+`high`. Invalid values remain `unknown`; they are never silently downgraded to
+LOW.
 
-Backend roles are `staff` (presented as Teacher), `counselor`, and `admin`.
-Teachers can review alerts and history. Counselors and administrators also see
-reports; system/technical details remain administrator-only. The current
-backend returns the same authorized alert set to all three reviewer roles and
-does not expose classroom assignments, so the mobile app does not claim
-classroom-specific filtering.
+## Severity rendering
 
-## Token lifecycle limitation
+List and detail titles are:
 
-The backend stores one token string per user, not multiple device records.
-Explicit sign-out first posts an empty token for the authenticated user, using
-the existing route, and clears local token association only after that request
-succeeds. This prevents the ordinary sign-out/sign-in account-switch path from
-leaving this device attached to the previous user.
+| Severity | Teacher-facing title |
+| --- | --- |
+| LOW | Possible classroom concern |
+| MEDIUM | Possible verbal-aggression indicators |
+| HIGH | High-priority classroom alert |
+| Invalid | Alert severity unavailable |
 
-There is no dedicated unregister endpoint, token-receipt cleanup, multi-device
-support, or server-side exclusion of blank tokens in normal broadcast mode.
-Those backend limitations must be addressed before claiming a complete
-multi-device lifecycle.
+Cards also show the timestamp, language, current location when returned,
+review-required indicator, and review status in history where already
+supported. HIGH is visually prominent without emergency or accusation
+wording.
 
-## Controlled device gate
+## Severity-evidence display
 
-Before creating a controlled alert, an operator must use the approved physical
-device and account to:
+The protected detail screen includes a “Why this alert was prioritized”
+section with:
 
-1. Install the development or production build (not Expo Go).
-2. Sign in and grant notification permission.
-3. Confirm the mobile registration request succeeds.
-4. From an administrator session, confirm
-   `GET /users/notification-recipient-audit` reports controlled mode, exactly
-   one eligible recipient, and `has_push_token: true`.
-5. Open an existing safe alert and compare its displayed transcript with the
-   API response.
+- primary reasons
+- matched evidence categories and stored matched phrases
+- supporting acoustic or context evidence
 
-Do not expose the token while recording these checks.
+Raw JSON is never displayed. Shared evidence-key labels intentionally match
+the frontend:
+
+| Backend key | Plain-language label |
+| --- | --- |
+| `term_category:self_harm_directive` | Severe self-harm directive detected in the transcript |
+| `self_harm_directive` | Severe self-harm directive |
+| `laughter_or_excitement_marker_present` | Laughter or excitement was present, but it did not cancel the stronger text evidence |
+
+Other keys use the same neutral humanization strategy as the frontend. The
+mobile app does not assign a stronger meaning that is absent from the shared
+contract.
+
+The detail screen also shows stored severity, review notice, exact transcript,
+language and available confidence, matched terms, categories, duration,
+detection confidence, event ID, timestamp, YAMNet execution state/class/score,
+and existing tone/acoustic indicators. Raw technical metrics remain restricted
+to the existing administrator role.
+
+## Historical and malformed evidence
+
+Evidence states remain distinct:
+
+- Backend `null`:
+  “Detailed severity evidence was not recorded for this historical alert.”
+- Valid object with no evidence items:
+  “Severity evidence was recorded, but no detailed reasons were included.”
+- Malformed optional evidence:
+  “Detailed severity evidence could not be displayed because its recorded
+  format was invalid.”
+- Omitted evidence:
+  “Detailed severity evidence is unavailable for this alert.”
+
+The stored severity remains visible. The app does not infer reasons from the
+transcript and does not expose malformed evidence content.
+
+## Human-review notice
+
+A non-empty backend `review_notice` is displayed unchanged. If it is null,
+empty, or missing, the fallback is:
+
+“Unverified possible-aggression alert. Human review required.”
+
+## Notification templates and payload
+
+The backend-provided notification title and body remain the displayed copy
+when they exactly match the responsible template for the validated severity.
+The mobile app does not replace them with stronger local claims; unexpected
+foreground copy is suppressed.
+
+Expected templates:
+
+| Severity | Title | Body |
+| --- | --- | --- |
+| LOW | Possible classroom concern | A low-severity unverified alert requires staff review. |
+| MEDIUM | Possible verbal-aggression indicators | A medium-severity unverified alert requires staff review. |
+| HIGH | High-priority classroom alert | Strong possible-aggression indicators were detected. Prompt human review is recommended. |
+
+Notification data must include `alertId` (or legacy `alert_id`) as a positive
+integer. `event_id`/`eventId` may be retained as supporting identity but is not
+used instead of the backend alert ID. Severity may be supplied as `severity`
+or `priority`.
+
+Foreground display and tap handling reject data containing transcript,
+matched-term, raw-audio, student, or speaker fields. The remote backend must
+also keep notification title/body privacy-safe because background and
+terminated-app notification UI is rendered by the operating system before
+application JavaScript can inspect it.
+
+## Listener lifecycle, duplicate protection, and navigation
+
+A single module-level manager owns one received listener and one response
+listener. Repeated setup returns the existing cleanup function. Cleanup removes
+both subscriptions and permits a later safe restart.
+
+Foreground presentation and response taps use separate ten-minute,
+in-memory alert-ID deduplication windows. This prevents duplicate local
+handling during a process lifetime; it does not claim provider-level
+exactly-once delivery.
+
+Navigation flow:
+
+1. Validate notification data and extract only the positive alert ID.
+2. Store that ID in encrypted device storage.
+3. Wait for authentication restoration and router readiness.
+4. If unauthenticated, show sign-in while retaining only the pending ID.
+5. After successful sign-in, open `/alert/[id]`.
+6. Fetch protected alert details with the current bearer session.
+7. Show safe unauthorized, not-found, invalid-response, or retry states.
+8. Clear the pending ID after routing.
+
+Foreground, background, and cold-start responses use this flow. Alert content
+is never stored in the route or shown before authentication. Explicit sign-out
+clears the pending ID and notification deduplication state.
+
+## Push-token registration
+
+- Registration runs only with an authenticated user ID.
+- Simulators/emulators return a physical-device-required state.
+- Expo Go returns an unsupported-build state.
+- Existing permission is checked first. The system prompt is requested only
+  while permission is undetermined.
+- Denial does not block sign-in or alert review.
+- The EAS project ID is resolved from runtime configuration and matches
+  `app.json`.
+- Expo token format is validated.
+- The same cached user/token pair is not posted twice.
+- A new token or different authenticated user is registered.
+- Temporary failure is returned truthfully and retried on a later app start or
+  sign-in.
+- Token and authentication values are not logged or displayed.
+- A registration/sign-out race is cancelled and detached.
+
+Explicit sign-out posts an empty token using the existing authenticated route
+before local session removal. If detachment fails, sign-out stops and explains
+that it could not complete safely.
+
+The backend currently stores one push-token string per user. The mobile app
+does not claim multi-device support. Signing in on another device may replace
+the first device’s token.
+
+## Android notification channels
+
+Two stable channels are created:
+
+| ID | Purpose | Importance | Sound |
+| --- | --- | --- | --- |
+| `echosense-alerts` | LOW and MEDIUM default | Default/normal | None |
+| `echosense-high-alerts` | HIGH | High | Single default alert sound |
+
+Descriptions say that alerts are unverified and require human review. No
+repeating loop, siren, emergency-service behavior, or confirmed-danger wording
+is configured.
+
+Android channel behavior is partly controlled by the user. Once a channel has
+been installed, some settings cannot be changed programmatically; users may
+need to adjust device settings or reinstall a test build. The backend/provider
+payload must select `echosense-high-alerts` for HIGH; otherwise Android uses
+the configured default `echosense-alerts`.
+
+## iOS behavior and limitations
+
+The app uses standard iOS notification permission and foreground
+banner/list/sound policy. Only validated HIGH data requests foreground sound.
+Notification responses use the same authenticated routing path.
+
+EchoSense does not request or assume Apple’s Critical Alerts entitlement. HIGH
+is a review priority, not an Apple Critical Alert. No accusation, punishment,
+or emergency action categories are added.
+
+Lock-screen preview content and visibility are controlled partly by the user’s
+iOS notification settings. The backend must continue sending privacy-safe
+title/body text.
+
+## Authentication and error behavior
+
+Bearer tokens are held in secure device storage and are not printed. Startup
+validates an unexpired session with `/auth/me`; transient outages retain a
+locally valid session, while authenticated 401/403 validation failures clear
+it. Delayed requests using an older token cannot erase a newer session.
+
+Alert requests use the current token. A 401 causes safe session invalidation,
+a 403 produces an inaccessible-alert state, and a 404 produces an unavailable
+alert state. Axios response data is not cached by the app. Explicit logout
+removes local authentication state only after safe push detachment.
+
+Offline screens do not claim the edge alert was lost. They state that available
+alerts can synchronize when connectivity returns and allow safe GET retries.
+No UI promises immediate delivery.
+
+## Physical-device test procedure
+
+Do not create a production alert for readiness checking.
+
+Prerequisites:
+
+- approved physical Android or iOS device
+- approved staff test account and credentials
+- development or production build, not Expo Go
+- notification permission enabled
+- authenticated session
+- valid Expo push token
+- stable production backend
+- controlled-recipient mode
+- verified controlled recipient and no unrelated recipients
+- approved controlled test phrase for a later, separately approved phase
+- operator available at the Raspberry Pi for that later phase
+
+Before any real test:
+
+1. Confirm the signed-in account is the configured controlled recipient.
+2. Confirm token registration succeeded without displaying the token.
+3. From an approved administrator session, GET
+   `/users/notification-recipient-audit`.
+4. Require controlled mode, resolved recipient, exactly one eligible
+   recipient, and `has_push_token: true`.
+5. Confirm no other recipient will receive the test.
+6. Confirm deployed LOW/MEDIUM/HIGH templates.
+7. Confirm the installed build points to the production API.
+8. Confirm permission is granted.
+9. Prefer a provider test or other safe non-alert notification first.
+10. Verify foreground receipt/tap, background receipt/tap, cold-start tap,
+    title/body, channel or iOS behavior, duplicate handling, and session-expiry
+    behavior.
+
+Stop if any recipient, credential, token, channel, or controlled-mode check is
+unknown. A real classroom-aggression alert and live microphone test require
+separate explicit approval.
+
+## Privacy constraints and known limitations
+
+- No credentials, auth tokens, push tokens, transcript payloads, or complete
+  alerts are logged.
+- Notification data containing transcript or identity fields is rejected by
+  foreground/tap handling, but background privacy ultimately depends on the
+  backend/provider payload.
+- No raw-audio support was added.
+- Notification delivery is not exactly once and deduplication is process-local.
+- The backend appears to support one push token per user, not multiple devices.
+- The backend has no dedicated unregister endpoint; blank-token detachment uses
+  the existing update route.
+- Foreground LOW/MEDIUM preferences cannot suppress operating-system-rendered
+  background notifications.
+- HIGH Android channel selection requires matching provider payload data.
+- Simulator/emulator and Expo Go environments cannot validate remote push.
+- iOS lock-screen previews depend on device settings.
+- No physical-device push receipt was performed in this implementation phase.

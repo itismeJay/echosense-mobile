@@ -76,7 +76,12 @@ export async function restoreSession(): Promise<User | null> {
     const status =
       axios.isAxiosError(caught) ? caught.response?.status : undefined;
     if (status === 401 || status === 403) {
-      await logout();
+      // A slow startup validation can finish after the user signs in again.
+      // Never let that stale response delete the newer session token.
+      const currentToken = await getToken();
+      if (currentToken === token) {
+        await logout();
+      }
       return null;
     }
     // A valid, unexpired stored session remains usable during a transient outage.

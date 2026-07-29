@@ -27,11 +27,12 @@ const alert = {
   transcribed_text: 'Sensitive phrase that must not be on a lock screen',
 };
 
-test('priority labels include readable text and normalize unknown values safely', () => {
+test('priority labels include readable text and preserve invalid values safely', () => {
   assert.equal(getPriorityLabel('high'), 'HIGH PRIORITY');
   assert.equal(getPriorityLabel('medium'), 'MEDIUM PRIORITY');
   assert.equal(getPriorityLabel('low'), 'LOW PRIORITY');
-  assert.equal(normalizeSeverity('unexpected'), 'low');
+  assert.equal(normalizeSeverity('unexpected'), 'unknown');
+  assert.equal(getPriorityLabel('unexpected'), 'PRIORITY UNAVAILABLE');
 });
 
 test('teacher-facing explanations avoid definitive claims', () => {
@@ -42,15 +43,29 @@ test('teacher-facing explanations avoid definitive claims', () => {
   }
 });
 
-test('notification copy is calm and excludes transcript content', () => {
+test('HIGH notification copy is distinct and excludes transcript content', () => {
   const copy = buildAlertNotificationCopy(alert);
-  assert.equal(copy.title, 'Possible aggression alert');
+  assert.equal(copy.title, 'High-priority classroom alert');
   assert.equal(
     copy.body,
-    'Unverified possible-aggression alert. Human review required.'
+    'Strong possible-aggression indicators were detected. Prompt human review is recommended.'
   );
   assert.doesNotMatch(copy.body, /Sensitive phrase/);
-  assert.doesNotMatch(copy.body, /aggression detected|bullying/i);
+  assert.doesNotMatch(copy.body, /bullying/i);
+});
+
+test('LOW and MEDIUM notification templates remain distinct', () => {
+  assert.deepEqual(buildAlertNotificationCopy({ ...alert, severity: 'low' }), {
+    title: 'Possible classroom concern',
+    body: 'A low-severity unverified alert requires staff review.',
+  });
+  assert.deepEqual(
+    buildAlertNotificationCopy({ ...alert, severity: 'medium' }),
+    {
+      title: 'Possible verbal-aggression indicators',
+      body: 'A medium-severity unverified alert requires staff review.',
+    }
+  );
 });
 
 test('existing backend roles map to role-appropriate presentation', () => {

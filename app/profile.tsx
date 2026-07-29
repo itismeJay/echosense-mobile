@@ -156,8 +156,9 @@ export default function ProfileScreen() {
             onValueChange={toggleLow}
           />
           <Text style={styles.notificationNote}>
-            These preferences apply to notifications the app can identify by
-            priority. Device notification settings also apply.
+            These preferences apply while EchoSense is open. Background and
+            lock-screen presentation also depends on backend delivery and your
+            device notification settings.
           </Text>
         </Section>
 

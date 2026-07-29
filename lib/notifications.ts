@@ -3,6 +3,7 @@ import * as Device from 'expo-device';
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import { extractAlertId, NotificationDeduper } from './notificationDedup';
+import { parseNotificationData } from './notificationPayload';
 import { clearPushToken, postPushToken } from './api';
 import {
   runPushRegistration,
@@ -114,7 +115,10 @@ export async function clearPushRegistration(): Promise<void> {
   await Promise.all([
     SecureStore.deleteItemAsync(PUSH_REGISTRATION_KEY),
     SecureStore.deleteItemAsync(LEGACY_PUSH_TOKEN_KEY),
+    SecureStore.deleteItemAsync(PENDING_ALERT_KEY),
   ]);
+  receivedNotificationDeduper.clear();
+  responseNotificationDeduper.clear();
 }
 
 export async function storePendingAlertId(alertId: string): Promise<void> {
@@ -134,14 +138,20 @@ export function shouldPresentNotification(
   data: Record<string, unknown> | null | undefined,
   now = Date.now()
 ): boolean {
-  return receivedNotificationDeduper.shouldHandle(extractAlertId(data), now);
+  const parsed = parseNotificationData(data);
+  return parsed
+    ? receivedNotificationDeduper.shouldHandle(parsed.alertId, now)
+    : false;
 }
 
 export function shouldHandleNotificationResponse(
   data: Record<string, unknown> | null | undefined,
   now = Date.now()
 ): boolean {
-  return responseNotificationDeduper.shouldHandle(extractAlertId(data), now);
+  const parsed = parseNotificationData(data);
+  return parsed
+    ? responseNotificationDeduper.shouldHandle(parsed.alertId, now)
+    : false;
 }
 
 export function getNotificationAlertId(

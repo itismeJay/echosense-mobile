@@ -40,18 +40,21 @@ export const SEVERITY_COLORS: Record<string, string> = {
   high: COLORS.high,
   medium: COLORS.medium,
   low: COLORS.low,
+  unknown: COLORS.textSecondary,
 };
 
 export const SEVERITY_ICONS: Record<string, string> = {
   high: 'alert-circle',
   medium: 'warning',
   low: 'information-circle',
+  unknown: 'help-circle',
 };
 
 export const SEVERITY_BACKGROUNDS: Record<string, string> = {
   high: COLORS.dangerBackground,
   medium: COLORS.warningBackground,
   low: COLORS.informationBackground,
+  unknown: COLORS.surfaceSecondary,
 };
 
 export const SPACING = {

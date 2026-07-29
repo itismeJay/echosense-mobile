@@ -2,11 +2,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   EVIDENCE_REVIEW_NOTE,
+  EMPTY_SEVERITY_EVIDENCE_MESSAGE,
   getExactTranscript,
   getLanguageLabel,
   getMatchedTermLabels,
+  getReviewNotice,
+  getSeverityEvidenceUnavailableMessage,
   getYamnetExplanation,
+  HISTORICAL_SEVERITY_EVIDENCE_MESSAGE,
   HUMAN_REVIEW_WORDING,
+  MALFORMED_SEVERITY_EVIDENCE_MESSAGE,
+  severityReasonLabel,
+  supportingEvidenceLabel,
+  termCategoryEvidenceLabel,
 } from '../lib/alertEvidence.ts';
 
 function alert(overrides = {}) {
@@ -83,5 +91,65 @@ test('required human-review wording and supporting note are exact', () => {
   assert.equal(
     EVIDENCE_REVIEW_NOTE,
     'The transcript and acoustic evidence are automated indicators. Review the surrounding context before taking action.'
+  );
+});
+
+test('backend review notice is used and fallback notice is exact', () => {
+  assert.equal(
+    getReviewNotice(alert({ review_notice: 'Backend review notice' })),
+    'Backend review notice'
+  );
+  assert.equal(getReviewNotice(alert({ review_notice: null })), HUMAN_REVIEW_WORDING);
+  assert.equal(getReviewNotice(alert({ review_notice: '   ' })), HUMAN_REVIEW_WORDING);
+});
+
+test('shared evidence labels exactly match frontend wording', () => {
+  assert.equal(
+    severityReasonLabel('term_category:self_harm_directive'),
+    'Severe self-harm directive detected in the transcript'
+  );
+  assert.equal(
+    termCategoryEvidenceLabel('self_harm_directive'),
+    'Severe self-harm directive'
+  );
+  assert.equal(
+    supportingEvidenceLabel('laughter_or_excitement_marker_present'),
+    'Laughter or excitement was present, but it did not cancel the stronger text evidence'
+  );
+});
+
+test('unknown evidence keys receive neutral readable fallback labels', () => {
+  assert.equal(
+    severityReasonLabel('future_signal:possible_context'),
+    'Future signal: possible context'
+  );
+  assert.equal(
+    termCategoryEvidenceLabel('future_category'),
+    'Future category'
+  );
+  assert.equal(
+    supportingEvidenceLabel('future_supporting_signal'),
+    'Future supporting signal'
+  );
+});
+
+test('historical, empty, and malformed evidence states are truthful', () => {
+  assert.equal(
+    getSeverityEvidenceUnavailableMessage(
+      alert({ severity_evidence_state: 'historical-unavailable' })
+    ),
+    HISTORICAL_SEVERITY_EVIDENCE_MESSAGE
+  );
+  assert.equal(
+    getSeverityEvidenceUnavailableMessage(
+      alert({ severity_evidence_state: 'empty' })
+    ),
+    EMPTY_SEVERITY_EVIDENCE_MESSAGE
+  );
+  assert.equal(
+    getSeverityEvidenceUnavailableMessage(
+      alert({ severity_evidence_state: 'malformed' })
+    ),
+    MALFORMED_SEVERITY_EVIDENCE_MESSAGE
   );
 });

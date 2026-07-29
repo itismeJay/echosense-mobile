@@ -9,12 +9,14 @@ import {
 import { COLORS, RADII, SPACING, TYPOGRAPHY } from '../lib/constants';
 import {
   formatDateTime,
+  getAlertTitle,
   getAlertExplanation,
   getPriorityLabel,
   humanizeStatus,
 } from '../lib/presentation';
 import type { Alert } from '../lib/types';
 import SeverityBadge from './SeverityBadge';
+import { getLanguageLabel } from '../lib/alertEvidence';
 
 interface Props {
   alert: Alert;
@@ -57,6 +59,13 @@ export default function AlertCard({
       </View>
 
       <View style={styles.locationRow}>
+        <View style={styles.titleCopy}>
+          <Text style={styles.alertTitle}>{getAlertTitle(alert.severity)}</Text>
+          <Text style={styles.reviewIndicator}>Review required</Text>
+        </View>
+      </View>
+
+      <View style={styles.locationRow}>
         <Ionicons
           name="location-outline"
           size={19}
@@ -74,6 +83,18 @@ export default function AlertCard({
           importantForAccessibility="no-hide-descendants"
         />
         <Text style={styles.time}>{formatDateTime(alert.created_at)}</Text>
+      </View>
+
+      <View style={styles.timeRow}>
+        <Ionicons
+          name="language-outline"
+          size={17}
+          color={COLORS.textMuted}
+          importantForAccessibility="no-hide-descendants"
+        />
+        <Text style={styles.time}>
+          {getLanguageLabel(alert.language)}
+        </Text>
       </View>
 
       {!compact ? (
@@ -143,6 +164,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: SPACING.sm,
+  },
+  titleCopy: {
+    flex: 1,
+    gap: SPACING.xs,
+  },
+  alertTitle: {
+    color: COLORS.text,
+    fontSize: TYPOGRAPHY.cardTitle,
+    fontWeight: '800',
+    lineHeight: 23,
+  },
+  reviewIndicator: {
+    color: COLORS.textSecondary,
+    fontSize: TYPOGRAPHY.caption,
+    fontWeight: '700',
   },
   location: {
     color: COLORS.text,
