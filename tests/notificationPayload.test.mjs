@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  getNotificationEventId,
+  ALERT_TEST_BODY,
+  ALERT_TEST_TITLE,
   getNotificationIdentity,
   getNotificationSeverity,
-  isExpectedNotificationCopy,
-  isExpectedNotificationCopyForData,
   notificationDataContainsSensitiveFields,
   parseNotificationData,
   parseNotificationEnvelope,
@@ -13,9 +12,18 @@ import {
   PROVIDER_TEST_ROUTE,
   PROVIDER_TEST_TITLE,
 } from '../lib/notificationPayload.ts';
-import { NotificationDeduper } from '../lib/notificationDedup.ts';
 
 const EVENT_ID = '123e4567-e89b-42d3-a456-426614174000';
+const FINALIZED_DATA = {
+  type: 'classroom_alert',
+  alertId: 123,
+  event_id: EVENT_ID,
+  severity: 'high',
+  severityLevel: 'HIGH',
+  trigger_type: 'KEYWORD',
+  route: '/alert/123',
+  is_test: false,
+};
 const PROVIDER_DATA = {
   type: 'provider_test',
   test_id: 'safe-test-id',
@@ -24,283 +32,220 @@ const PROVIDER_DATA = {
   is_test: true,
 };
 
-test('valid provider_test payload and exact approved copy are accepted', () => {
-  const parsed = parseNotificationData(PROVIDER_DATA);
-  assert.deepEqual(parsed, {
-    type: 'provider_test',
-    testId: 'safe-test-id',
-    route: '/notifications/test',
-    severity: 'low',
-    isTest: true,
+test('complete finalized classroom payload is normalized to trusted data', () => {
+  assert.deepEqual(parseNotificationData(FINALIZED_DATA), {
+    type: 'classroom_alert',
+    alertId: 123,
+    eventId: EVENT_ID,
+    severity: 'high',
+    severityLevel: 'HIGH',
+    triggerType: 'KEYWORD',
+    isTest: false,
   });
+});
+
+test('LOW, MEDIUM, and HIGH normalize case-insensitively', () => {
+  for (const [input, canonical, normalized] of [
+    ['low', 'LOW', 'low'],
+    ['MeDiUm', 'medium', 'medium'],
+    ['HIGH', 'high', 'high'],
+  ]) {
+    const parsed = parseNotificationData({
+      ...FINALIZED_DATA,
+      severity: input,
+      severityLevel: canonical,
+    });
+    assert.equal(parsed?.severity, normalized);
+    assert.equal(parsed?.severityLevel, normalized.toUpperCase());
+  }
+  assert.equal(getNotificationSeverity({ severity: 'invalid' }), 'unknown');
+});
+
+test('severity and severityLevel must agree', () => {
   assert.equal(
-    isExpectedNotificationCopyForData(
-      PROVIDER_TEST_TITLE,
-      PROVIDER_TEST_BODY,
-      parsed
-    ),
-    true
+    parseNotificationData({
+      ...FINALIZED_DATA,
+      severity: 'LOW',
+      severityLevel: 'HIGH',
+    }),
+    null
   );
+});
+
+test('trigger_type accepts only KEYWORD, ACOUSTIC, and TEST', () => {
+  for (const trigger_type of ['KEYWORD', 'ACOUSTIC']) {
+    assert.ok(parseNotificationData({ ...FINALIZED_DATA, trigger_type }));
+  }
+  for (const trigger_type of ['keyword', 'UNKNOWN', '', null]) {
+    assert.equal(
+      parseNotificationData({ ...FINALIZED_DATA, trigger_type }),
+      null
+    );
+  }
+});
+
+test('finalized event_id is required and must be a UUID', () => {
+  assert.equal(parseNotificationData(FINALIZED_DATA)?.eventId, EVENT_ID);
+  for (const event_id of [undefined, null, '', 'not-a-uuid']) {
+    assert.equal(parseNotificationData({ ...FINALIZED_DATA, event_id }), null);
+  }
+});
+
+test('numeric-string alert IDs normalize and must agree with the exact route', () => {
+  assert.equal(
+    parseNotificationData({
+      ...FINALIZED_DATA,
+      alertId: '123',
+    })?.alertId,
+    123
+  );
+  for (const value of [
+    { ...FINALIZED_DATA, route: '/alert/124' },
+    { ...FINALIZED_DATA, route: '/alert/123/' },
+    { ...FINALIZED_DATA, route: '/notifications/test' },
+    { ...FINALIZED_DATA, alertId: '00123' },
+    { ...FINALIZED_DATA, alertId: Number.MAX_SAFE_INTEGER + 1 },
+  ]) {
+    assert.equal(parseNotificationData(value), null);
+  }
+});
+
+test('TEST trigger and is_test marker are cross-validated', () => {
+  const testData = {
+    ...FINALIZED_DATA,
+    trigger_type: 'TEST',
+    is_test: true,
+  };
+  assert.equal(parseNotificationData(testData)?.isTest, true);
+  assert.equal(
+    parseNotificationData({ ...testData, is_test: false }),
+    null
+  );
+  assert.equal(
+    parseNotificationData({ ...FINALIZED_DATA, is_test: true }),
+    null
+  );
+});
+
+test('finalized alert TEST accepts only the exact approved copy', () => {
+  const data = {
+    ...FINALIZED_DATA,
+    trigger_type: 'TEST',
+    is_test: true,
+  };
+  assert.ok(parseNotificationEnvelope(data, ALERT_TEST_TITLE, ALERT_TEST_BODY));
+  assert.equal(
+    parseNotificationEnvelope(data, `${ALERT_TEST_TITLE} `, ALERT_TEST_BODY),
+    null
+  );
+  assert.equal(
+    parseNotificationEnvelope(data, ALERT_TEST_TITLE, 'Alternate body'),
+    null
+  );
+});
+
+test('normal classroom copy remains privacy-minimized and severity-specific', () => {
+  const copies = {
+    LOW: [
+      'Possible classroom concern',
+      'A low-severity unverified alert requires staff review.',
+    ],
+    MEDIUM: [
+      'Possible verbal-aggression indicators',
+      'A medium-severity unverified alert requires staff review.',
+    ],
+    HIGH: [
+      'High-priority classroom alert',
+      'Strong possible-aggression indicators were detected. Prompt human review is recommended.',
+    ],
+  };
+  for (const [severity, [title, body]] of Object.entries(copies)) {
+    const data = {
+      ...FINALIZED_DATA,
+      severity,
+      severityLevel: severity,
+    };
+    assert.ok(parseNotificationEnvelope(data, title, body));
+  }
+});
+
+test('provider-only tests remain separate from classroom alerts', () => {
   assert.deepEqual(
     parseNotificationEnvelope(
       PROVIDER_DATA,
       PROVIDER_TEST_TITLE,
       PROVIDER_TEST_BODY
     ),
-    parsed
+    {
+      type: 'provider_test',
+      testId: 'safe-test-id',
+      route: '/notifications/test',
+      severity: 'low',
+      isTest: true,
+    }
+  );
+  assert.equal(
+    parseNotificationEnvelope(
+      { ...PROVIDER_DATA, alertId: 123 },
+      PROVIDER_TEST_TITLE,
+      PROVIDER_TEST_BODY
+    ),
+    null
   );
 });
 
-test('provider_test requires its exact discriminator and fields', () => {
-  const invalid = [
-    { ...PROVIDER_DATA, type: undefined },
-    { ...PROVIDER_DATA, type: 'unsupported' },
-    { ...PROVIDER_DATA, test_id: undefined },
-    { ...PROVIDER_DATA, test_id: '' },
-    { ...PROVIDER_DATA, test_id: '   ' },
-    { ...PROVIDER_DATA, route: '/alert/42' },
-    { ...PROVIDER_DATA, is_test: undefined },
-    { ...PROVIDER_DATA, is_test: false },
-    { ...PROVIDER_DATA, severity: 'HIGH' },
-    { ...PROVIDER_DATA, severity: 'low' },
-    { ...PROVIDER_DATA, alertId: 42 },
-    { ...PROVIDER_DATA, unknown_key: 'value' },
-  ];
-  for (const value of invalid) {
-    assert.equal(parseNotificationData(value), null);
-  }
-});
-
-test('provider_test rejects every prohibited sensitive field', () => {
+test('unknown and sensitive top-level fields fail closed', () => {
+  assert.equal(
+    parseNotificationData({ ...FINALIZED_DATA, unknown_key: 'value' }),
+    null
+  );
   for (const key of [
     'transcript',
-    'transcribed_text',
+    'transcription_text',
+    'monitored_terms',
     'matched_terms',
-    'hard_hits',
-    'soft_hits',
-    'categories',
-    'waveform_snapshot',
+    'detected_words',
+    'evidence',
     'raw_audio',
-    'audio',
-    'student',
     'student_id',
-    'studentIdentity',
     'speaker',
-    'speaker_id',
-    'speakerIdentity',
-    'user',
-    'user_identity',
-    'classroom_accusation',
-    'access_token',
-    'accessToken',
-    'push_token',
-    'pushToken',
+    'classroom_id',
+    'school',
     'credentials',
+    'jwt',
+    'authorization',
+    'password',
+    'push_token',
   ]) {
-    const data = { ...PROVIDER_DATA, [key]: 'synthetic-sensitive-value' };
+    const data = { ...FINALIZED_DATA, [key]: 'sensitive-value' };
     assert.equal(notificationDataContainsSensitiveFields(data), true, key);
     assert.equal(parseNotificationData(data), null, key);
   }
 });
 
-test('provider_test rejects alternate title or body text', () => {
-  assert.equal(
-    parseNotificationEnvelope(
-      PROVIDER_DATA,
-      'Alternate test title',
-      PROVIDER_TEST_BODY
-    ),
-    null
-  );
-  assert.equal(
-    parseNotificationEnvelope(
-      PROVIDER_DATA,
-      PROVIDER_TEST_TITLE,
-      'A classroom alert was created.'
-    ),
-    null
-  );
-});
-
-test('foreground provider tests are handled once by test_id', () => {
-  const parsed = parseNotificationEnvelope(
-    PROVIDER_DATA,
-    PROVIDER_TEST_TITLE,
-    PROVIDER_TEST_BODY
-  );
-  assert.ok(parsed);
-  const deduper = new NotificationDeduper(1000);
-  const identity = getNotificationIdentity(parsed);
-  assert.equal(deduper.shouldHandle(identity, 1000), true);
-  assert.equal(deduper.shouldHandle(identity, 1500), false);
-
-  const malformed = parseNotificationEnvelope(
-    { ...PROVIDER_DATA, route: '/arbitrary' },
-    PROVIDER_TEST_TITLE,
-    PROVIDER_TEST_BODY
-  );
-  assert.equal(malformed, null);
-});
-
-test('different provider tests and classroom alerts have separate identities', () => {
-  const first = parseNotificationData(PROVIDER_DATA);
-  const second = parseNotificationData({
-    ...PROVIDER_DATA,
-    test_id: 'safe-test-id-2',
-  });
-  const alert = parseNotificationData({
+test('legacy route-free classroom compatibility is deliberate and isolated', () => {
+  assert.deepEqual(parseNotificationData({ alertId: 42, severity: 'LOW' }), {
     type: 'classroom_alert',
     alertId: 42,
-    severity: 'LOW',
+    eventId: null,
+    severity: 'low',
+    severityLevel: 'LOW',
+    triggerType: 'KEYWORD',
+    isTest: false,
   });
-  assert.ok(first);
-  assert.ok(second);
-  assert.ok(alert);
-  assert.notEqual(
-    getNotificationIdentity(first),
-    getNotificationIdentity(second)
-  );
-  assert.notEqual(
-    getNotificationIdentity(first),
-    getNotificationIdentity(alert)
-  );
-});
-
-test('LOW, MEDIUM, and HIGH classroom data remain distinct', () => {
-  assert.equal(getNotificationSeverity({ severity: 'LOW' }), 'low');
-  assert.equal(getNotificationSeverity({ severity: 'medium' }), 'medium');
-  assert.equal(getNotificationSeverity({ priority: 'HIGH' }), 'high');
-  assert.equal(getNotificationSeverity({ severity: 'invalid' }), 'unknown');
-
-  for (const severity of ['LOW', 'MEDIUM', 'HIGH']) {
-    const parsed = parseNotificationData({
-      type: 'classroom_alert',
-      alertId: 42,
-      severity,
-    });
-    assert.equal(parsed?.type, 'classroom_alert');
-    assert.equal(parsed?.severity, severity.toLowerCase());
-  }
-});
-
-test('classroom alerts require a valid alert ID and reject conflicting aliases', () => {
-  assert.deepEqual(
-    parseNotificationData({
-      type: 'classroom_alert',
-      alertId: 42,
-      event_id: EVENT_ID,
-      severity: 'HIGH',
-    }),
-    {
-      type: 'classroom_alert',
-      alertId: '42',
-      eventId: EVENT_ID,
-      severity: 'high',
-    }
-  );
-  assert.equal(
-    parseNotificationData({
-      type: 'classroom_alert',
-      severity: 'LOW',
-    }),
-    null
-  );
-  assert.equal(
-    parseNotificationData({
-      type: 'classroom_alert',
-      alertId: 'invalid',
-      severity: 'LOW',
-    }),
-    null
-  );
-  assert.equal(
-    parseNotificationData({
-      alertId: 42,
-      alert_id: 43,
-      severity: 'LOW',
-    }),
-    null
-  );
-  assert.equal(getNotificationEventId({ event_id: 'invalid' }), null);
-});
-
-test('legacy classroom payload remains supported only for its allowlisted shape', () => {
-  assert.deepEqual(
-    parseNotificationData({ alertId: 42, severity: 'low' }),
-    {
-      type: 'classroom_alert',
-      alertId: '42',
-      eventId: null,
-      severity: 'low',
-    }
-  );
   assert.equal(
     parseNotificationData({
       alertId: 42,
       severity: 'LOW',
-      arbitraryRoute: '/notifications/test',
+      route: '/alert/42',
     }),
     null
   );
 });
 
-test('classroom data rejects sensitive fields', () => {
-  for (const key of [
-    'transcript',
-    'transcribed_text',
-    'matched_terms',
-    'hard_hits',
-    'soft_hits',
-    'categories',
-    'waveform_snapshot',
-    'student_id',
-    'speaker',
-    'raw_audio',
-    'access_token',
-    'push_token',
-  ]) {
-    const data = {
-      type: 'classroom_alert',
-      alertId: 42,
-      severity: 'LOW',
-      [key]: 'synthetic-sensitive-value',
-    };
-    assert.equal(notificationDataContainsSensitiveFields(data), true);
-    assert.equal(parseNotificationData(data), null);
-  }
-});
-
-test('responsible classroom title and body remain severity-specific', () => {
-  for (const copy of [
-    [
-      'Possible classroom concern',
-      'A low-severity unverified alert requires staff review.',
-      'low',
-    ],
-    [
-      'Possible verbal-aggression indicators',
-      'A medium-severity unverified alert requires staff review.',
-      'medium',
-    ],
-    [
-      'High-priority classroom alert',
-      'Strong possible-aggression indicators were detected. Prompt human review is recommended.',
-      'high',
-    ],
-  ]) {
-    assert.equal(
-      isExpectedNotificationCopy(copy[0], copy[1], copy[2]),
-      true
-    );
-  }
-  assert.equal(isExpectedNotificationCopy('', 'Body', 'low'), false);
-  assert.equal(isExpectedNotificationCopy('Title', null, 'high'), false);
-  assert.equal(
-    isExpectedNotificationCopy(
-      'High-priority classroom alert',
-      'A low-severity unverified alert requires staff review.',
-      'high'
-    ),
-    false
-  );
+test('notification identity namespaces provider and finalized events', () => {
+  const alert = parseNotificationData(FINALIZED_DATA);
+  const provider = parseNotificationData(PROVIDER_DATA);
+  assert.equal(getNotificationIdentity(alert), `classroom_alert:${EVENT_ID}`);
+  assert.equal(getNotificationIdentity(provider), 'provider_test:safe-test-id');
 });

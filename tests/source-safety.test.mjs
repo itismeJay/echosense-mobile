@@ -57,6 +57,28 @@ test('polling does not schedule local notifications', async () => {
   assert.doesNotMatch(source, /scheduleNotificationAsync/);
 });
 
+test('Expo Go startup does not eagerly load unsupported notifications', async () => {
+  const startupFiles = [
+    await read('app/_layout.tsx'),
+    await read('app/profile.tsx'),
+    await read('lib/notifications.ts'),
+  ];
+  for (const source of startupFiles) {
+    assert.doesNotMatch(
+      source,
+      /import \* as Notifications from 'expo-notifications'/
+    );
+  }
+
+  const runtime = await read('lib/notificationRuntime.ts');
+  const expoGoGuard = runtime.indexOf('if (isExpoGo) return null;');
+  const dynamicImport = runtime.indexOf(
+    "notificationsPromise ??= import('expo-notifications')"
+  );
+  assert.ok(expoGoGuard >= 0);
+  assert.ok(dynamicImport > expoGoGuard);
+});
+
 test('push tokens and notification payloads are not printed', async () => {
   const login = await read('app/login.tsx');
   const notifications = await read('lib/notifications.ts');
@@ -74,6 +96,21 @@ test('push registration and logout use the authenticated existing backend route'
   assert.match(api, /Authentication required/);
   assert.match(profile, /await clearPushRegistration\(\);\s+await logout\(\);/);
   assert.match(notifications, /PUSH_REGISTRATION_KEY/);
+});
+
+test('successful authentication does not await notification setup', async () => {
+  const login = await read('app/login.tsx');
+  const layout = await read('app/_layout.tsx');
+  assert.doesNotMatch(login, /await syncPushRegistration/);
+  assert.match(login, /onSignIn\(signedInUser\)/);
+  assert.match(layout, /void syncPushRegistration\(userId\)/);
+});
+
+test('notification channels are initialized before registration completes', async () => {
+  const layout = await read('app/_layout.tsx');
+  const notifications = await read('lib/notifications.ts');
+  assert.match(layout, /ensureAndroidNotificationChannels\(\)/);
+  assert.match(notifications, /await ensureAndroidNotificationChannels\(\)/);
 });
 
 test('notification navigation persists authenticated targets and handles cold starts', async () => {
@@ -113,7 +150,7 @@ test('provider-test validation uses exact copy and an allowlisted route', async 
     /No classroom alert was created/
   );
   assert.match(payload, /PROVIDER_TEST_ROUTE = '\/notifications\/test'/);
-  assert.match(payload, /hasOnlyKeys\(data, PROVIDER_TEST_KEYS\)/);
+  assert.match(payload, /hasExactKeys\(data, PROVIDER_TEST_KEYS\)/);
   assert.match(payload, /data\.is_test !== true/);
   assert.match(payload, /data\.severity !== 'LOW'/);
 });
@@ -137,6 +174,14 @@ test('alert detail renders the backend evidence contract and review wording', as
   }
   assert.match(details, /HUMAN_REVIEW_WORDING/);
   assert.match(details, /EVIDENCE_REVIEW_NOTE/);
+});
+
+test('alert detail labels validated TEST navigation only after event agreement', async () => {
+  const details = await read('app/alert/[id].tsx');
+  assert.match(details, /notificationTest/);
+  assert.match(details, /notificationEventId/);
+  assert.match(details, /alert\.event_id\?\.toLowerCase\(\)/);
+  assert.match(details, /TEST alert data/);
 });
 
 test('user-facing alert wording never claims confirmed bullying', async () => {

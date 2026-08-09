@@ -38,7 +38,7 @@
       [
         "expo-notifications",
         {
-          "defaultChannel": "echosense-alerts",
+          "defaultChannel": "echosense-phase3-alerts",
           "sounds": [
             "./assets/sounds/water_drop.wav"
           ]

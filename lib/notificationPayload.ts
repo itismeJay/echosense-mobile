@@ -1,12 +1,25 @@
-import type { AlertSeverity } from './types';
+import type { AlertSeverity, CanonicalSeverity } from './types';
 
+export const ALERT_TEST_TITLE = 'EchoSense Alert — TEST';
+export const ALERT_TEST_BODY =
+  'TEST possible verbal-aggression event. Human review required.';
 export const PROVIDER_TEST_TITLE = 'EchoSense notification test';
 export const PROVIDER_TEST_BODY =
   'This is a controlled delivery test for the approved device. No classroom alert was created.';
 export const PROVIDER_TEST_ROUTE = '/notifications/test';
 
-const CLASSROOM_ALERT_KEYS = new Set([
+const FINALIZED_CLASSROOM_ALERT_KEYS = new Set([
   'type',
+  'alertId',
+  'event_id',
+  'severity',
+  'severityLevel',
+  'trigger_type',
+  'route',
+  'is_test',
+]);
+
+const LEGACY_CLASSROOM_ALERT_KEYS = new Set([
   'alertId',
   'alert_id',
   'severity',
@@ -26,12 +39,17 @@ const PROVIDER_TEST_KEYS = new Set([
 
 const SENSITIVE_DATA_KEYS = new Set([
   'transcript',
+  'transcription',
+  'transcription_text',
   'transcribed_text',
+  'monitored_terms',
   'matched_terms',
   'detected_words',
   'hard_hits',
   'soft_hits',
   'categories',
+  'evidence',
+  'severity_evidence',
   'waveform_snapshot',
   'raw_audio',
   'audio',
@@ -50,23 +68,34 @@ const SENSITIVE_DATA_KEYS = new Set([
   'useremail',
   'useridentity',
   'user_identity',
+  'classroom',
+  'classroom_id',
+  'school',
+  'school_id',
   'classroom_accusation',
   'classroomaccusation',
   'access_token',
   'accesstoken',
   'push_token',
   'pushtoken',
+  'token',
+  'jwt',
   'credential',
   'credentials',
   'authorization',
   'password',
 ]);
 
+export type NotificationTriggerType = 'KEYWORD' | 'ACOUSTIC' | 'TEST';
+
 export interface SafeClassroomAlertNotificationData {
   type: 'classroom_alert';
-  alertId: string;
+  alertId: number;
   eventId: string | null;
   severity: Exclude<AlertSeverity, 'unknown'>;
+  severityLevel: CanonicalSeverity;
+  triggerType: NotificationTriggerType;
+  isTest: boolean;
 }
 
 export interface SafeProviderTestNotificationData {
@@ -106,23 +135,36 @@ function hasOnlyKeys(
   return Object.keys(data).every((key) => allowedKeys.has(key));
 }
 
-function extractStableAlertId(
-  data: Record<string, unknown>
-): string | null {
-  const primary = normalizeAlertId(data.alertId);
-  const legacy = normalizeAlertId(data.alert_id);
-  if (primary && legacy && primary !== legacy) return null;
-  return primary ?? legacy;
+function hasExactKeys(
+  data: Record<string, unknown>,
+  expectedKeys: ReadonlySet<string>
+): boolean {
+  return (
+    Object.keys(data).length === expectedKeys.size &&
+    hasOnlyKeys(data, expectedKeys)
+  );
 }
 
-function normalizeAlertId(value: unknown): string | null {
+export function normalizeNotificationAlertId(value: unknown): number | null {
   if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
-    return String(value);
+    return value;
   }
-  if (typeof value === 'string' && /^[1-9]\d*$/.test(value.trim())) {
-    return String(Number(value.trim()));
+  if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value.trim())) {
+    return null;
   }
-  return null;
+  const normalized = Number(value.trim());
+  return Number.isSafeInteger(normalized) && normalized > 0
+    ? normalized
+    : null;
+}
+
+function extractLegacyAlertId(
+  data: Record<string, unknown>
+): number | null {
+  const primary = normalizeNotificationAlertId(data.alertId);
+  const legacy = normalizeNotificationAlertId(data.alert_id);
+  if (primary && legacy && primary !== legacy) return null;
+  return primary ?? legacy;
 }
 
 function isValidProviderTestId(value: unknown): value is string {
@@ -149,7 +191,8 @@ export function notificationDataContainsSensitiveFields(
       SENSITIVE_DATA_KEYS.has(flattened) ||
       flattened.includes('accesstoken') ||
       flattened.includes('pushtoken') ||
-      flattened.includes('credential')
+      flattened.includes('credential') ||
+      flattened.includes('authorization')
     );
   });
 }
@@ -171,6 +214,16 @@ export function getNotificationSeverity(
   }
 }
 
+function getCanonicalSeverity(value: unknown): CanonicalSeverity | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toUpperCase();
+  return normalized === 'LOW' ||
+    normalized === 'MEDIUM' ||
+    normalized === 'HIGH'
+    ? normalized
+    : null;
+}
+
 export function getNotificationEventId(
   data: Record<string, unknown> | null | undefined
 ): string | null {
@@ -185,30 +238,67 @@ function normalizeEventId(value: unknown): string | null {
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       value
     )
-    ? value
+    ? value.toLowerCase()
     : null;
 }
 
-function parseClassroomAlertData(
+function parseFinalizedClassroomAlertData(
   data: Record<string, unknown>
 ): SafeClassroomAlertNotificationData | null {
   if (
-    !hasOnlyKeys(data, CLASSROOM_ALERT_KEYS) ||
-    notificationDataContainsSensitiveFields(data)
-  ) {
-    return null;
-  }
-  if (
-    data.type !== undefined &&
+    !hasExactKeys(data, FINALIZED_CLASSROOM_ALERT_KEYS) ||
+    notificationDataContainsSensitiveFields(data) ||
     data.type !== 'classroom_alert'
   ) {
     return null;
   }
 
-  const alertId = extractStableAlertId(data);
+  const alertId = normalizeNotificationAlertId(data.alertId);
+  const eventId = getNotificationEventId(data);
+  const severity = getNotificationSeverity({ severity: data.severity });
+  const severityLevel = getCanonicalSeverity(data.severityLevel);
+  const triggerType = data.trigger_type;
+  const isTest = data.is_test;
+  if (
+    !alertId ||
+    !eventId ||
+    severity === 'unknown' ||
+    !severityLevel ||
+    severity.toUpperCase() !== severityLevel ||
+    (triggerType !== 'KEYWORD' &&
+      triggerType !== 'ACOUSTIC' &&
+      triggerType !== 'TEST') ||
+    typeof isTest !== 'boolean' ||
+    (triggerType === 'TEST') !== isTest ||
+    data.route !== `/alert/${alertId}`
+  ) {
+    return null;
+  }
+
+  return {
+    type: 'classroom_alert',
+    alertId,
+    eventId,
+    severity,
+    severityLevel,
+    triggerType,
+    isTest,
+  };
+}
+
+function parseLegacyClassroomAlertData(
+  data: Record<string, unknown>
+): SafeClassroomAlertNotificationData | null {
+  if (
+    !hasOnlyKeys(data, LEGACY_CLASSROOM_ALERT_KEYS) ||
+    notificationDataContainsSensitiveFields(data)
+  ) {
+    return null;
+  }
+
+  const alertId = extractLegacyAlertId(data);
   const severity = getNotificationSeverity(data);
   if (!alertId || severity === 'unknown') return null;
-
   if (
     data.severity !== undefined &&
     data.priority !== undefined &&
@@ -230,6 +320,9 @@ function parseClassroomAlertData(
     alertId,
     eventId: getNotificationEventId(data),
     severity,
+    severityLevel: severity.toUpperCase() as CanonicalSeverity,
+    triggerType: 'KEYWORD',
+    isTest: false,
   };
 }
 
@@ -237,8 +330,7 @@ function parseProviderTestData(
   data: Record<string, unknown>
 ): SafeProviderTestNotificationData | null {
   if (
-    !hasOnlyKeys(data, PROVIDER_TEST_KEYS) ||
-    Object.keys(data).length !== PROVIDER_TEST_KEYS.size ||
+    !hasExactKeys(data, PROVIDER_TEST_KEYS) ||
     notificationDataContainsSensitiveFields(data) ||
     data.type !== 'provider_test' ||
     !isValidProviderTestId(data.test_id) ||
@@ -262,15 +354,16 @@ export function parseNotificationData(
   data: Record<string, unknown> | null | undefined
 ): SafeNotificationData | null {
   if (!data || notificationDataContainsSensitiveFields(data)) return null;
-
   if (data.type === 'provider_test') return parseProviderTestData(data);
-  if (data.type === 'classroom_alert') return parseClassroomAlertData(data);
+  if (data.type === 'classroom_alert') {
+    return parseFinalizedClassroomAlertData(data);
+  }
   if (data.type !== undefined) return null;
 
-  // Backward compatibility is limited to the existing, allowlisted classroom
-  // payload shape. Missing type is never accepted for provider-test fields.
+  // Deliberate compatibility for the pre-Phase-3 allowlisted classroom shape.
+  // It cannot carry TEST state or any caller-supplied route.
   if ('alertId' in data || 'alert_id' in data) {
-    return parseClassroomAlertData(data);
+    return parseLegacyClassroomAlertData(data);
   }
   return null;
 }
@@ -301,6 +394,9 @@ export function isExpectedNotificationCopyForData(
   if (data.type === 'provider_test') {
     return title === PROVIDER_TEST_TITLE && body === PROVIDER_TEST_BODY;
   }
+  if (data.isTest) {
+    return title === ALERT_TEST_TITLE && body === ALERT_TEST_BODY;
+  }
   return isExpectedNotificationCopy(title, body, data.severity);
 }
 
@@ -320,5 +416,5 @@ export function getNotificationIdentity(
 ): string {
   return data.type === 'provider_test'
     ? `provider_test:${data.testId}`
-    : `classroom_alert:${data.alertId}`;
+    : `classroom_alert:${data.eventId ?? data.alertId}`;
 }

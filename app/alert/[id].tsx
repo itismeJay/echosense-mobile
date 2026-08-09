@@ -53,7 +53,12 @@ import SeverityBadge from '../../components/SeverityBadge';
 import { AuthContext } from '../_layout';
 
 export default function AlertDetailScreen() {
-  const { id } = useLocalSearchParams<{ id?: string | string[] }>();
+  const { id, notificationEventId, notificationTest } =
+    useLocalSearchParams<{
+      id?: string | string[];
+      notificationEventId?: string | string[];
+      notificationTest?: string | string[];
+    }>();
   const { user } = useContext(AuthContext);
   const [alert, setAlert] = useState<Alert | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,6 +69,12 @@ export default function AlertDetailScreen() {
   const [technicalExpanded, setTechnicalExpanded] = useState(false);
 
   const alertId = Number(Array.isArray(id) ? id[0] : id);
+  const trustedEventId = Array.isArray(notificationEventId)
+    ? notificationEventId[0]
+    : notificationEventId;
+  const trustedTestMarker = Array.isArray(notificationTest)
+    ? notificationTest[0]
+    : notificationTest;
 
   const load = useCallback(async () => {
     if (!Number.isSafeInteger(alertId) || alertId <= 0) {
@@ -173,6 +184,29 @@ export default function AlertDetailScreen() {
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         >
+          {trustedTestMarker === 'true' &&
+          typeof trustedEventId === 'string' &&
+          alert.event_id?.toLowerCase() === trustedEventId.toLowerCase() ? (
+            <View
+              accessible
+              accessibilityLabel="TEST alert data. Human review is still required."
+              style={styles.testBanner}
+            >
+              <Ionicons
+                name="flask-outline"
+                size={22}
+                color={COLORS.information}
+                importantForAccessibility="no-hide-descendants"
+              />
+              <View style={styles.testBannerCopy}>
+                <Text style={styles.testBannerTitle}>TEST alert data</Text>
+                <Text style={styles.testBannerText}>
+                  This alert was opened from a validated Phase 3 TEST
+                  notification. Human review is still required.
+                </Text>
+              </View>
+            </View>
+          ) : null}
           <View style={styles.hero}>
             <Text accessibilityRole="header" style={styles.title}>
               {getAlertTitle(alert.severity)}
@@ -613,6 +647,30 @@ const styles = StyleSheet.create({
     padding: SPACING.lg,
     paddingBottom: SPACING.xxxl,
     gap: SPACING.lg,
+  },
+  testBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: SPACING.md,
+    padding: SPACING.lg,
+    borderWidth: 1,
+    borderColor: COLORS.primarySoft,
+    borderRadius: RADII.md,
+    backgroundColor: COLORS.informationBackground,
+  },
+  testBannerCopy: {
+    flex: 1,
+    gap: SPACING.xs,
+  },
+  testBannerTitle: {
+    color: COLORS.text,
+    fontSize: TYPOGRAPHY.body,
+    fontWeight: '800',
+  },
+  testBannerText: {
+    color: COLORS.textSecondary,
+    fontSize: TYPOGRAPHY.secondary,
+    lineHeight: 21,
   },
   hero: {
     gap: SPACING.md,

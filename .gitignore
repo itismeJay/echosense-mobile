@@ -30,6 +30,9 @@ yarn-error.*
 .DS_Store
 *.pem
 
+# Firebase Admin SDK service-account keys
+/echosense-*-firebase-adminsdk-*.json
+
 # local env files
 .env*.local
 

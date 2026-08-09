@@ -3,15 +3,14 @@ import { router } from 'expo-router';
 import React, { useContext, useEffect, useState } from 'react';
 import {
   Alert,
+  Platform,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import * as Notifications from 'expo-notifications';
 import { logout } from '../lib/auth';
 import {
   COLORS,
@@ -22,41 +21,33 @@ import {
 } from '../lib/constants';
 import {
   clearPushRegistration,
-  getNotifPrefs,
-  saveNotifPrefs,
+  getPushDiagnostics,
+  subscribeToPushRegistrationStatus,
+  type PushDiagnostics,
 } from '../lib/notifications';
 import { getRoleLabel } from '../lib/presentation';
 import { AuthContext } from './_layout';
 
 export default function ProfileScreen() {
   const { user, onSignOut } = useContext(AuthContext);
-  const [notificationPermission, setNotificationPermission] =
-    useState<Notifications.PermissionStatus | null>(null);
-  const [mediumPriority, setMediumPriority] = useState(true);
-  const [lowPriority, setLowPriority] = useState(true);
+  const [pushDiagnostics, setPushDiagnostics] =
+    useState<PushDiagnostics | null>(null);
 
   useEffect(() => {
-    async function loadPreferences() {
-      const [permission, preferences] = await Promise.all([
-        Notifications.getPermissionsAsync().catch(() => null),
-        getNotifPrefs(),
-      ]);
-      setNotificationPermission(permission?.status ?? null);
-      setMediumPriority(preferences.medium);
-      setLowPriority(preferences.low);
+    let active = true;
+    async function loadDiagnostics() {
+      const diagnostics = await getPushDiagnostics(user?.id ?? null);
+      if (active) setPushDiagnostics(diagnostics);
     }
-    loadPreferences();
-  }, []);
-
-  async function toggleMedium(value: boolean) {
-    setMediumPriority(value);
-    await saveNotifPrefs({ medium: value, low: lowPriority });
-  }
-
-  async function toggleLow(value: boolean) {
-    setLowPriority(value);
-    await saveNotifPrefs({ medium: mediumPriority, low: value });
-  }
+    void loadDiagnostics();
+    const unsubscribe = subscribeToPushRegistrationStatus(() => {
+      void loadDiagnostics();
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [user?.id]);
 
   function handleSignOut() {
     Alert.alert(
@@ -86,11 +77,11 @@ export default function ProfileScreen() {
   }
 
   const permissionLabel =
-    notificationPermission === 'granted'
+    pushDiagnostics?.permissionStatus === 'granted'
       ? 'Allowed on this device'
-      : notificationPermission === 'denied'
+      : pushDiagnostics?.permissionStatus === 'denied'
         ? 'Turned off in device settings'
-        : notificationPermission === 'undetermined'
+        : pushDiagnostics?.permissionStatus === 'undetermined'
           ? 'Not decided'
           : 'Status unavailable';
 
@@ -132,33 +123,84 @@ export default function ProfileScreen() {
           <InfoRow
             icon="alert-circle-outline"
             iconColor={COLORS.danger}
-            label="High-priority alerts"
+            label="Audible alert policy"
+            value="LOW, MEDIUM, HIGH, alert TEST, and provider TEST"
+          />
+          <View style={styles.divider} />
+          <InfoRow
+            icon="phone-portrait-outline"
+            label="Physical device"
+            value={pushDiagnostics?.physicalDevice ? 'Detected' : 'Not detected'}
+          />
+          <View style={styles.divider} />
+          <InfoRow
+            icon="construct-outline"
+            label="Notification build"
             value={
-              notificationPermission === 'granted'
-                ? 'Allowed by device settings'
-                : 'Requires device permission'
+              pushDiagnostics?.supportedBuild
+                ? 'Development/preview/production build supported'
+                : 'Unsupported or Expo Go'
+            }
+          />
+          {Platform.OS === 'ios' ? (
+            <>
+              <View style={styles.divider} />
+              <InfoRow
+                icon="volume-high-outline"
+                label="iOS sound permission"
+                value={pushDiagnostics?.iosSoundPermission ?? 'unavailable'}
+              />
+            </>
+          ) : null}
+          <View style={styles.divider} />
+          <InfoRow
+            icon="key-outline"
+            label="Expo token"
+            value={
+              pushDiagnostics?.expoTokenRegistered === true
+                ? 'Registered for this account'
+                : pushDiagnostics?.expoTokenRegistered === false
+                  ? 'Not registered for this account'
+                  : 'Status unavailable'
             }
           />
           <View style={styles.divider} />
-          <ToggleRow
-            icon="warning-outline"
-            iconColor={COLORS.warning}
-            label="Medium-priority alerts"
-            value={mediumPriority}
-            onValueChange={toggleMedium}
+          <InfoRow
+            icon="sync-outline"
+            label="Last registration status"
+            value={formatRegistrationStatus(
+              pushDiagnostics?.lastRegistrationStatus
+            )}
           />
+          {Platform.OS === 'android' ? (
+            <>
+              <View style={styles.divider} />
+              <InfoRow
+                icon="layers-outline"
+                label="Expected Android channels"
+                value={
+                  pushDiagnostics?.expectedAndroidChannels.join(', ') ??
+                  'Status unavailable'
+                }
+              />
+              <View style={styles.divider} />
+              <InfoRow
+                icon="refresh-outline"
+                label="Clean reinstall"
+                value="Required for controlled testing after channel sound changes"
+              />
+            </>
+          ) : null}
           <View style={styles.divider} />
-          <ToggleRow
-            icon="information-circle-outline"
-            iconColor={COLORS.information}
-            label="Low-priority alerts"
-            value={lowPriority}
-            onValueChange={toggleLow}
+          <InfoRow
+            icon="server-outline"
+            label="Backend host"
+            value={pushDiagnostics?.apiHost ?? 'Unavailable'}
           />
           <Text style={styles.notificationNote}>
-            These preferences apply while EchoSense is open. Background and
-            lock-screen presentation also depends on backend delivery and your
-            device notification settings.
+            Badge updates are disabled. Background and lock-screen sound still
+            depends on the backend requesting default sound and on device
+            notification settings.
           </Text>
         </Section>
 
@@ -269,39 +311,12 @@ function InfoRow({
   );
 }
 
-function ToggleRow({
-  icon,
-  iconColor,
-  label,
-  value,
-  onValueChange,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  iconColor: string;
-  label: string;
-  value: boolean;
-  onValueChange: (value: boolean) => void;
-}) {
-  return (
-    <View style={styles.row}>
-      <Ionicons
-        name={icon}
-        size={20}
-        color={iconColor}
-        importantForAccessibility="no-hide-descendants"
-      />
-      <Text style={styles.toggleLabel}>{label}</Text>
-      <Switch
-        accessibilityRole="switch"
-        accessibilityLabel={label}
-        value={value}
-        onValueChange={onValueChange}
-        trackColor={{ false: COLORS.border, true: COLORS.primarySoft }}
-        thumbColor={value ? COLORS.primary : COLORS.textMuted}
-        ios_backgroundColor={COLORS.border}
-      />
-    </View>
-  );
+function formatRegistrationStatus(status: string | undefined): string {
+  if (!status) return 'Not checked';
+  return status
+    .split('-')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
 const styles = StyleSheet.create({
@@ -396,13 +411,6 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     fontSize: TYPOGRAPHY.caption,
     lineHeight: 19,
-  },
-  toggleLabel: {
-    flex: 1,
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.secondary,
-    fontWeight: '600',
-    lineHeight: 20,
   },
   divider: {
     height: 1,

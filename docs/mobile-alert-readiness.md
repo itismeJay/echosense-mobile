@@ -1,6 +1,12 @@
 # EchoSense mobile severity and notification readiness
 
-Last updated: 2026-07-30
+Last updated: 2026-08-04
+
+> Phase 3 notification compatibility, sound policy, environment configuration,
+> rebuild requirements, and the current physical-device gate are authoritative
+> in `docs/mobile-phase3-notification-readiness.md`. Notification-specific
+> behavior recorded below describes the earlier phase where LOW/MEDIUM and the
+> provider channel were silent.
 
 ## Safety statement
 

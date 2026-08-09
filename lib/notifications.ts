@@ -1,7 +1,7 @@
-import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 import { extractAlertId, NotificationDeduper } from './notificationDedup';
 import {
   getNotificationIdentity,
@@ -9,22 +9,29 @@ import {
   parseNotificationEnvelope,
 } from './notificationPayload';
 import {
+  createLegacyAlertIntent,
   parseStoredNotificationIntent,
   type PendingNotificationIntent,
 } from './notificationNavigation';
+import { API_HOST } from './constants';
+import { ANDROID_NOTIFICATION_CHANNELS } from './notificationChannels';
 import { clearPushToken, postPushToken } from './api';
 import {
   runPushRegistration,
   type PushRegistrationResult,
   type StoredPushRegistration,
 } from './pushRegistration';
+import {
+  getExpoNotifications,
+  ensureAndroidNotificationChannels,
+  isExpoGo,
+} from './notificationRuntime';
 
 const PROJECT_ID =
   Constants.easConfig?.projectId ??
   (Constants.expoConfig?.extra?.eas?.projectId as string | undefined) ??
   '4a4a3316-a896-4f42-bc76-ca4b833e5909';
 
-const isExpoGo = Constants.executionEnvironment === 'storeClient';
 const receivedNotificationDeduper = new NotificationDeduper();
 const responseNotificationDeduper = new NotificationDeduper();
 const PUSH_REGISTRATION_KEY = 'push_registration_v1';
@@ -32,28 +39,40 @@ const LEGACY_PUSH_TOKEN_KEY = 'push_token';
 const PENDING_ALERT_KEY = 'pending_notification_alert_id';
 const PENDING_NOTIFICATION_INTENT_KEY = 'pending_notification_intent_v2';
 let pushLifecycleGeneration = 0;
+let pushRegistrationInFlight: {
+  userId: string | null;
+  promise: Promise<PushRegistrationResult>;
+} | null = null;
+let lastPushRegistrationStatus: PushRegistrationStatus = 'not-attempted';
+const pushStatusListeners = new Set<(status: PushRegistrationStatus) => void>();
 
-export interface NotifPrefs {
-  medium: boolean;
-  low: boolean;
+export type PushRegistrationStatus =
+  | PushRegistrationResult['status']
+  | 'not-attempted';
+
+export interface PushDiagnostics {
+  physicalDevice: boolean;
+  supportedBuild: boolean;
+  permissionStatus: string;
+  iosSoundPermission: 'allowed' | 'not-allowed' | 'unavailable';
+  expoTokenRegistered: boolean | null;
+  lastRegistrationStatus: PushRegistrationStatus;
+  expectedAndroidChannels: string[];
+  apiHost: string;
+  cleanReinstallMayBeNeeded: boolean;
 }
 
-export async function getNotifPrefs(): Promise<NotifPrefs> {
-  const [m, l] = await Promise.all([
-    SecureStore.getItemAsync('notif_medium'),
-    SecureStore.getItemAsync('notif_low'),
-  ]);
-  return {
-    medium: m !== 'false',
-    low: l !== 'false',
-  };
+function publishPushRegistrationStatus(status: PushRegistrationStatus): void {
+  lastPushRegistrationStatus = status;
+  for (const listener of pushStatusListeners) listener(status);
 }
 
-export async function saveNotifPrefs(prefs: NotifPrefs): Promise<void> {
-  await Promise.all([
-    SecureStore.setItemAsync('notif_medium', String(prefs.medium)),
-    SecureStore.setItemAsync('notif_low', String(prefs.low)),
-  ]);
+export function subscribeToPushRegistrationStatus(
+  listener: (status: PushRegistrationStatus) => void
+): () => void {
+  pushStatusListeners.add(listener);
+  listener(lastPushRegistrationStatus);
+  return () => pushStatusListeners.delete(listener);
 }
 
 async function getStoredPushRegistration(): Promise<StoredPushRegistration | null> {
@@ -72,17 +91,59 @@ async function getStoredPushRegistration(): Promise<StoredPushRegistration | nul
 export async function syncPushRegistration(
   userId: string | null
 ): Promise<PushRegistrationResult> {
+  if (
+    pushRegistrationInFlight &&
+    pushRegistrationInFlight.userId === userId
+  ) {
+    return pushRegistrationInFlight.promise;
+  }
+
+  const promise = performPushRegistration(userId).finally(() => {
+    if (pushRegistrationInFlight?.promise === promise) {
+      pushRegistrationInFlight = null;
+    }
+  });
+  pushRegistrationInFlight = { userId, promise };
+  return promise;
+}
+
+async function performPushRegistration(
+  userId: string | null
+): Promise<PushRegistrationResult> {
   const registrationGeneration = pushLifecycleGeneration;
+  if (
+    userId &&
+    Device.isDevice &&
+    !isExpoGo &&
+    !(await ensureAndroidNotificationChannels())
+  ) {
+    const result: PushRegistrationResult = {
+      status: 'channel-setup-failed',
+    };
+    publishPushRegistrationStatus(result.status);
+    return result;
+  }
+  const getNotifications = async () => {
+    const notifications = await getExpoNotifications();
+    if (!notifications) {
+      throw new Error('Notifications require a development build');
+    }
+    return notifications;
+  };
   const result = await runPushRegistration({
     userId,
     isPhysicalDevice: Device.isDevice,
     isSupportedBuild: !isExpoGo,
     getPermissionStatus: async () =>
-      (await Notifications.getPermissionsAsync()).status,
+      (await (await getNotifications()).getPermissionsAsync()).status,
     requestPermission: async () =>
-      (await Notifications.requestPermissionsAsync()).status,
+      (await (await getNotifications()).requestPermissionsAsync()).status,
     getPushToken: async () =>
-      (await Notifications.getExpoPushTokenAsync({ projectId: PROJECT_ID })).data,
+      (
+        await (
+          await getNotifications()
+        ).getExpoPushTokenAsync({ projectId: PROJECT_ID })
+      ).data,
     getStoredRegistration: getStoredPushRegistration,
     registerToken: async (token) => {
       if (registrationGeneration !== pushLifecycleGeneration) {
@@ -115,7 +176,58 @@ export async function syncPushRegistration(
         : `[Push] Registration unavailable: ${result.status}.`
     );
   }
+  publishPushRegistrationStatus(result.status);
   return result;
+}
+
+export async function getPushDiagnostics(
+  userId: string | null
+): Promise<PushDiagnostics> {
+  const notifications = await getExpoNotifications();
+  let permissionStatus = 'unavailable';
+  let iosSoundPermission: PushDiagnostics['iosSoundPermission'] =
+    'unavailable';
+  if (notifications) {
+    try {
+      const permission = await notifications.getPermissionsAsync();
+      permissionStatus = permission.status;
+      if (Platform.OS === 'ios') {
+        iosSoundPermission = permission.ios?.allowsSound
+          ? 'allowed'
+          : 'not-allowed';
+      }
+    } catch {
+      permissionStatus = 'unavailable';
+    }
+  }
+
+  let expoTokenRegistered: boolean | null = null;
+  try {
+    const stored = await getStoredPushRegistration();
+    expoTokenRegistered = Boolean(
+      userId && stored?.userId === userId && isExpoPushTokenSafe(stored.token)
+    );
+  } catch {
+    expoTokenRegistered = null;
+  }
+
+  return {
+    physicalDevice: Device.isDevice,
+    supportedBuild: !isExpoGo && Boolean(notifications),
+    permissionStatus,
+    iosSoundPermission,
+    expoTokenRegistered,
+    lastRegistrationStatus: lastPushRegistrationStatus,
+    expectedAndroidChannels: ANDROID_NOTIFICATION_CHANNELS.map(
+      (channel) => channel.id
+    ),
+    apiHost: API_HOST,
+    cleanReinstallMayBeNeeded: Platform.OS === 'android',
+  };
+}
+
+function isExpoPushTokenSafe(token: string): boolean {
+  return /^(?:Expo|Exponent)PushToken\[[^\]\s]+\]$/.test(token);
 }
 
 export async function clearPushRegistration(): Promise<void> {
@@ -129,6 +241,7 @@ export async function clearPushRegistration(): Promise<void> {
   ]);
   receivedNotificationDeduper.clear();
   responseNotificationDeduper.clear();
+  publishPushRegistrationStatus('not-authenticated');
 }
 
 export async function storePendingNotificationIntent(
@@ -144,9 +257,12 @@ export async function storePendingNotificationIntent(
 }
 
 export async function getPendingNotificationIntent(): Promise<PendingNotificationIntent | null> {
-  const raw = await SecureStore.getItemAsync(
-    PENDING_NOTIFICATION_INTENT_KEY
-  );
+  let raw: string | null;
+  try {
+    raw = await SecureStore.getItemAsync(PENDING_NOTIFICATION_INTENT_KEY);
+  } catch {
+    return null;
+  }
   if (raw) {
     try {
       const parsed = parseStoredNotificationIntent(JSON.parse(raw));
@@ -154,16 +270,25 @@ export async function getPendingNotificationIntent(): Promise<PendingNotificatio
     } catch {
       // Invalid stored navigation state is removed below.
     }
-    await SecureStore.deleteItemAsync(PENDING_NOTIFICATION_INTENT_KEY);
+    await SecureStore.deleteItemAsync(PENDING_NOTIFICATION_INTENT_KEY).catch(
+      () => {}
+    );
   }
 
   // Migrate an alert target stored by an earlier app version without ever
   // interpreting it as a provider-test route.
-  const legacyAlertId = extractAlertId({
-    alertId: await SecureStore.getItemAsync(PENDING_ALERT_KEY),
-  });
+  let legacyValue: string | null;
+  try {
+    legacyValue = await SecureStore.getItemAsync(PENDING_ALERT_KEY);
+  } catch {
+    return null;
+  }
+  const legacyAlertId = extractAlertId({ alertId: legacyValue });
   return legacyAlertId
-    ? { type: 'classroom_alert', alertId: legacyAlertId }
+    ? createLegacyAlertIntent(
+        Number(legacyAlertId),
+        new Date().toISOString()
+      )
     : null;
 }
 
@@ -208,5 +333,5 @@ export function getNotificationAlertId(
   data: Record<string, unknown> | null | undefined
 ): string | null {
   const parsed = parseNotificationData(data);
-  return parsed?.type === 'classroom_alert' ? parsed.alertId : null;
+  return parsed?.type === 'classroom_alert' ? String(parsed.alertId) : null;
 }

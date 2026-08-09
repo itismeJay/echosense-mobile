@@ -6,7 +6,6 @@ import React, {
 } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -21,8 +20,6 @@ import { Redirect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, RADII, SPACING, TYPOGRAPHY } from '../lib/constants';
 import { login, wakeup } from '../lib/auth';
-import { syncPushRegistration } from '../lib/notifications';
-import type { PushRegistrationResult } from '../lib/pushRegistration';
 import { AuthContext } from './_layout';
 
 export default function LoginScreen() {
@@ -43,33 +40,6 @@ export default function LoginScreen() {
     };
   }, []);
 
-  function explainPushResult(result: PushRegistrationResult) {
-    if (result.status === 'permission-denied') {
-      Alert.alert(
-        'Notifications are off',
-        'You can still review alerts in EchoSense. To receive new alert notifications, allow notifications in your device settings.'
-      );
-    } else if (result.status === 'physical-device-required') {
-      Alert.alert(
-        'Physical device required',
-        'Remote push notifications require an approved physical Android or iOS device. Alert review remains available without push registration.'
-      );
-    } else if (result.status === 'unsupported-build') {
-      Alert.alert(
-        'Development build required',
-        'Remote alert notifications are unavailable in Expo Go. Install the approved development or production build on a physical device.'
-      );
-    } else if (
-      result.status === 'token-unavailable' ||
-      result.status === 'registration-failed'
-    ) {
-      Alert.alert(
-        'Notification setup incomplete',
-        'Sign-in succeeded, but this device could not register for remote alerts. Check your connection and reopen EchoSense to retry.'
-      );
-    }
-  }
-
   async function handleLogin() {
     if (!email.trim() || !password) {
       setError('Enter your email address and password.');
@@ -83,9 +53,7 @@ export default function LoginScreen() {
 
     try {
       const signedInUser = await login(email.trim(), password);
-      const pushResult = await syncPushRegistration(signedInUser.id);
       onSignIn(signedInUser);
-      explainPushResult(pushResult);
     } catch (caught: unknown) {
       const status =
         typeof caught === 'object' &&

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "877413628110",
+    "project_id": "echosense-5823f",
+    "storage_bucket": "echosense-5823f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:877413628110:android:4deeaeb67bf5a60105789f",
+        "android_client_info": {
+          "package_name": "com.echosense.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBqhEBna6-H8uV4HkpH1pAmMQUuP79uqCI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

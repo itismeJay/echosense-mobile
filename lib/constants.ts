@@ -1,4 +1,9 @@
-export const API_BASE_URL = 'https://echosense-backend-75h3.onrender.com';
+import { getApiHost, resolveApiBaseUrl } from './apiConfig.ts';
+
+export const API_BASE_URL = resolveApiBaseUrl(
+  process.env.EXPO_PUBLIC_API_BASE_URL
+);
+export const API_HOST = getApiHost(API_BASE_URL);
 export const REFRESH_INTERVAL_MS = 5000;
 export const DETECTION_RECENCY_THRESHOLD_MS = 30_000;
 export const MAX_ALERTS_IN_MEMORY = 250;

@@ -11,7 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { checkConnectivity } from '../lib/api';
 import {
-  API_BASE_URL,
+  API_HOST,
   APP_VERSION,
   CAPSTONE_YEAR,
   COLORS,
@@ -157,8 +157,8 @@ export default function SystemInformationScreen() {
           <View style={styles.divider} />
           <InfoRow
             icon="globe-outline"
-            label="API endpoint"
-            value={API_BASE_URL}
+            label="API host"
+            value={API_HOST}
           />
         </Section>
 

@@ -13,10 +13,12 @@ import React, {
   useMemo,
   useState,
 } from 'react';
-import { Platform } from 'react-native';
+import { AppState } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as Notifications from 'expo-notifications';
-import Constants from 'expo-constants';
+import type {
+  Notification,
+  NotificationResponse,
+} from 'expo-notifications';
 import { COLORS } from '../lib/constants';
 import {
   restoreSession,
@@ -26,7 +28,6 @@ import {
 } from '../lib/auth';
 import { canViewReports } from '../lib/presentation';
 import {
-  getNotifPrefs,
   getPendingNotificationIntent,
   clearPendingNotificationIntent,
   shouldHandleNotificationResponse,
@@ -36,23 +37,22 @@ import {
 } from '../lib/notifications';
 import LoadingScreen from '../components/LoadingScreen';
 import { createNotificationListenerManager } from '../lib/notificationListeners';
-import {
-  ANDROID_NOTIFICATION_CHANNELS,
-} from '../lib/notificationChannels';
 import { parseNotificationEnvelope } from '../lib/notificationPayload';
 import {
   createPendingNotificationIntent,
   resolvePendingNotificationAction,
   type PendingNotificationIntent,
 } from '../lib/notificationNavigation';
+import {
+  ensureAndroidNotificationChannels,
+  getExpoNotifications,
+} from '../lib/notificationRuntime';
+import { createPushRegistrationLifecycle } from '../lib/pushRegistration';
+import { getForegroundNotificationBehavior } from '../lib/notificationPresentation';
 
-const isExpoGo = Constants.executionEnvironment === 'storeClient';
 const STARTUP_RESTORE_TIMEOUT_MS = 25_000;
 const notificationListenerManager =
-  createNotificationListenerManager<
-    Notifications.Notification,
-    Notifications.NotificationResponse
-  >();
+  createNotificationListenerManager<Notification, NotificationResponse>();
 
 async function restoreStartupState(): Promise<{
   restoredUser: User | null;
@@ -100,38 +100,32 @@ export const AuthContext = createContext<AuthContextValue>({
   onSignOut: () => {},
 });
 
-Notifications.setNotificationHandler({
-  handleNotification: async (notification) => {
-    const { data, title, body } = notification.request.content;
-    const parsed = parseNotificationEnvelope(data, title, body);
-    const priority = parsed?.severity ?? 'unknown';
-    const shouldPresent = shouldPresentNotification(
-      data,
-      title,
-      body
-    );
-    const isHigh =
-      parsed?.type === 'classroom_alert' && priority === 'high';
-    const preferences = await getNotifPrefs();
-    const priorityEnabled =
-      parsed?.type === 'provider_test'
-        ? true
-        : priority === 'medium'
-          ? preferences.medium
-          : priority === 'low'
-            ? preferences.low
-            : true;
-    const shouldShow = shouldPresent && priorityEnabled;
+async function configureNotificationHandler() {
+  const notifications = await getExpoNotifications();
+  if (!notifications) return;
 
-    return {
-      shouldShowAlert: shouldShow,
-      shouldShowBanner: shouldShow,
-      shouldShowList: shouldShow,
-      shouldPlaySound: shouldShow && isHigh,
-      shouldSetBadge: false,
-    };
-  },
-});
+  try {
+    notifications.setNotificationHandler({
+      handleNotification: async (notification) => {
+        const { data, title, body } = notification.request.content;
+        const parsed = parseNotificationEnvelope(data, title, body);
+        const shouldPresent = shouldPresentNotification(
+          data,
+          title,
+          body
+        );
+        return getForegroundNotificationBehavior(parsed, shouldPresent);
+      },
+    });
+  } catch {
+    // Unsupported notification runtimes fail closed without blocking startup.
+  }
+}
+
+const notificationRuntimeReady = Promise.all([
+  configureNotificationHandler(),
+  ensureAndroidNotificationChannels(),
+]);
 
 export default function RootLayout() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -146,9 +140,10 @@ export default function RootLayout() {
   useEffect(() => {
     wakeup();
     let active = true;
+    let stopNotificationListeners = () => {};
 
     async function queueResponse(
-      response: Notifications.NotificationResponse
+      response: NotificationResponse
     ) {
       const { data, title, body } =
         response.notification.request.content;
@@ -160,11 +155,17 @@ export default function RootLayout() {
         new Date().toISOString()
       );
       if (!intent) return;
-      await storePendingNotificationIntent(intent);
+      try {
+        await storePendingNotificationIntent(intent);
+      } catch {
+        // Continue with the in-memory trusted intent when storage is unavailable.
+      }
       if (active) setPendingIntent(intent);
     }
 
     async function setup() {
+      await notificationRuntimeReady;
+      const notifications = await getExpoNotifications();
       const { restoredUser, pendingIntent: storedIntent } =
         await startupStatePromise;
       if (!active) return;
@@ -173,53 +174,35 @@ export default function RootLayout() {
       setPendingIntent(storedIntent);
       setAuthChecked(true);
 
-      if (restoredUser) {
-        void syncPushRegistration(restoredUser.id);
-      }
-
-      if (!isExpoGo && Platform.OS === 'android') {
-        for (const channel of ANDROID_NOTIFICATION_CHANNELS) {
-          await Notifications.setNotificationChannelAsync(channel.id, {
-            name: channel.name,
-            description: channel.description,
-            importance:
-              channel.importance === 'high'
-                ? Notifications.AndroidImportance.HIGH
-                : Notifications.AndroidImportance.DEFAULT,
-            sound: channel.sound,
-            enableVibrate: channel.enableVibrate,
-            ...(channel.importance === 'high'
-              ? { vibrationPattern: [0, 80] }
-              : {}),
-          });
+      if (notifications) {
+        try {
+          const lastResponse =
+            await notifications.getLastNotificationResponseAsync();
+          if (lastResponse) await queueResponse(lastResponse);
+          await notifications.clearLastNotificationResponseAsync();
+        } catch {
+          // Notification response APIs can be unavailable on unsupported runtimes.
         }
       }
 
-      try {
-        const lastResponse =
-          await Notifications.getLastNotificationResponseAsync();
-        if (lastResponse) await queueResponse(lastResponse);
-        await Notifications.clearLastNotificationResponseAsync();
-      } catch {
-        // Notification response APIs can be unavailable on unsupported runtimes.
-      }
+      if (!active || !notifications) return;
+      stopNotificationListeners = notificationListenerManager.start(
+        {
+          addReceivedListener:
+            notifications.addNotificationReceivedListener,
+          addResponseListener:
+            notifications.addNotificationResponseReceivedListener,
+        },
+        () => {
+          // Foreground presentation and ID deduplication are handled above.
+        },
+        (response) => {
+          void queueResponse(response);
+        }
+      );
     }
 
-    setup();
-
-    const stopNotificationListeners = notificationListenerManager.start(
-      {
-        addReceivedListener: Notifications.addNotificationReceivedListener,
-        addResponseListener:
-          Notifications.addNotificationResponseReceivedListener,
-      },
-      () => {
-        // Foreground presentation and ID deduplication are handled above.
-      },
-      (response) => {
-        void queueResponse(response);
-      }
-    );
+    void setup();
     const unsubscribeSession = subscribeToSessionInvalidation(() => {
       if (!active) return;
       setUser(null);
@@ -232,6 +215,40 @@ export default function RootLayout() {
       unsubscribeSession();
     };
   }, []);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const userId = user.id;
+    let active = true;
+    let stopPushLifecycle = () => {};
+
+    async function setupPushLifecycle() {
+      await notificationRuntimeReady;
+      const notifications = await getExpoNotifications();
+      if (!active) return;
+      if (!notifications) {
+        void syncPushRegistration(userId);
+        return;
+      }
+      const lifecycle = createPushRegistrationLifecycle({
+        syncRegistration: () => syncPushRegistration(userId),
+        addPushTokenChangeListener: (listener) =>
+          typeof notifications.addPushTokenListener === 'function'
+            ? notifications.addPushTokenListener(() => listener())
+            : { remove: () => {} },
+        addAppStateChangeListener: (listener) =>
+          AppState.addEventListener('change', listener),
+      });
+      stopPushLifecycle = lifecycle.start();
+      void syncPushRegistration(userId);
+    }
+
+    void setupPushLifecycle();
+    return () => {
+      active = false;
+      stopPushLifecycle();
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     if (!authChecked || !navigationState?.key) return;
@@ -263,7 +280,11 @@ export default function RootLayout() {
     if (action.type === 'navigate-alert') {
       router.push({
         pathname: '/alert/[id]',
-        params: { id: action.alertId },
+        params: {
+          id: String(action.alertId),
+          notificationEventId: action.eventId ?? undefined,
+          notificationTest: action.isTest ? 'true' : undefined,
+        },
       });
     } else if (action.type === 'navigate-provider-test') {
       router.push({
@@ -274,6 +295,10 @@ export default function RootLayout() {
         },
       });
     } else {
+      if (action.type === 'none' && pendingIntent) {
+        setPendingIntent(null);
+        void clearPendingNotificationIntent();
+      }
       return;
     }
     setPendingIntent(null);

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  createPushRegistrationLifecycle,
   isExpoPushToken,
   runPushRegistration,
 } from '../lib/pushRegistration.ts';
@@ -152,6 +153,49 @@ test('token and backend failures are returned without crashing', async () => {
   );
 });
 
+test('permission query and request failures are returned separately', async () => {
+  const queryFailure = dependencies({
+    getPermissionStatus: async () => {
+      throw new Error('synthetic permission query failure');
+    },
+  });
+  const requestFailure = dependencies({
+    getPermissionStatus: async () => 'undetermined',
+    requestPermission: async () => {
+      throw new Error('synthetic permission request failure');
+    },
+  });
+  assert.equal(
+    (await runPushRegistration(queryFailure.values)).status,
+    'permission-query-failed'
+  );
+  assert.equal(
+    (await runPushRegistration(requestFailure.values)).status,
+    'permission-request-failed'
+  );
+});
+
+test('SecureStore read and write failures do not escape registration', async () => {
+  const readFailure = dependencies({
+    getStoredRegistration: async () => {
+      throw new Error('synthetic secure read failure');
+    },
+  });
+  const writeFailure = dependencies({
+    storeRegistration: async () => {
+      throw new Error('synthetic secure write failure');
+    },
+  });
+  assert.equal(
+    (await runPushRegistration(readFailure.values)).status,
+    'storage-unavailable'
+  );
+  assert.equal(
+    (await runPushRegistration(writeFailure.values)).status,
+    'storage-unavailable'
+  );
+});
+
 test('only valid Expo push-token formats are accepted', async () => {
   assert.equal(isExpoPushToken(FAKE_TOKEN), true);
   assert.equal(isExpoPushToken('ExponentPushToken[synthetic]'), true);
@@ -164,4 +208,41 @@ test('only valid Expo push-token formats are accepted', async () => {
     'token-unavailable'
   );
   assert.deepEqual(invalid.calls.registrations, []);
+});
+
+test('token changes and app foreground retry registration with cleanup', async () => {
+  const state = {
+    syncs: 0,
+    tokenListener: null,
+    appStateListener: null,
+    tokenRemoves: 0,
+    appStateRemoves: 0,
+  };
+  const lifecycle = createPushRegistrationLifecycle({
+    syncRegistration: async () => {
+      state.syncs += 1;
+      return { status: 'registered', token: FAKE_TOKEN };
+    },
+    addPushTokenChangeListener(listener) {
+      state.tokenListener = listener;
+      return { remove: () => (state.tokenRemoves += 1) };
+    },
+    addAppStateChangeListener(listener) {
+      state.appStateListener = listener;
+      return { remove: () => (state.appStateRemoves += 1) };
+    },
+  });
+  const stop = lifecycle.start();
+  state.tokenListener();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(state.syncs, 1);
+  state.appStateListener('background');
+  assert.equal(state.syncs, 1);
+  state.appStateListener('active');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(state.syncs, 2);
+  stop();
+  assert.equal(state.tokenRemoves, 1);
+  assert.equal(state.appStateRemoves, 1);
+  assert.equal(lifecycle.isActive(), false);
 });

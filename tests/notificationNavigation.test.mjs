@@ -3,31 +3,49 @@ import test from 'node:test';
 import {
   createPendingNotificationIntent,
   maskProviderTestId,
+  MAX_PENDING_NOTIFICATION_AGE_MS,
   parseStoredNotificationIntent,
   resolvePendingNotificationAction,
 } from '../lib/notificationNavigation.ts';
 
-const RECEIVED_AT = '2026-07-30T12:00:00.000Z';
-const ALERT_INTENT = { type: 'classroom_alert', alertId: '42' };
+const RECEIVED_AT = '2026-08-04T12:00:00.000Z';
+const NOW = Date.parse(RECEIVED_AT);
+const EVENT_ID = '123e4567-e89b-42d3-a456-426614174000';
+const ALERT_DATA = {
+  type: 'classroom_alert',
+  alertId: 42,
+  eventId: EVENT_ID,
+  severity: 'high',
+  severityLevel: 'HIGH',
+  triggerType: 'TEST',
+  isTest: true,
+};
+const ALERT_INTENT = {
+  type: 'classroom_alert',
+  alertId: 42,
+  eventId: EVENT_ID,
+  severity: 'HIGH',
+  triggerType: 'TEST',
+  isTest: true,
+  receivedAt: RECEIVED_AT,
+};
 const TEST_INTENT = {
   type: 'provider_test',
   testId: 'safe-test-id',
   receivedAt: RECEIVED_AT,
 };
 
-test('notification data creates only type-specific safe intents', () => {
+test('classroom notification creates the minimal trusted typed intent', () => {
   assert.deepEqual(
-    createPendingNotificationIntent(
-      {
-        type: 'classroom_alert',
-        alertId: '42',
-        eventId: null,
-        severity: 'high',
-      },
-      RECEIVED_AT
-    ),
+    createPendingNotificationIntent(ALERT_DATA, RECEIVED_AT, NOW),
     ALERT_INTENT
   );
+  assert.equal('route' in ALERT_INTENT, false);
+  assert.equal('transcript' in ALERT_INTENT, false);
+  assert.equal('evidence' in ALERT_INTENT, false);
+});
+
+test('provider-only intent stays separate and contains a local receipt time', () => {
   assert.deepEqual(
     createPendingNotificationIntent(
       {
@@ -37,42 +55,58 @@ test('notification data creates only type-specific safe intents', () => {
         severity: 'low',
         isTest: true,
       },
-      RECEIVED_AT
+      RECEIVED_AT,
+      NOW
     ),
     TEST_INTENT
   );
 });
 
-test('unauthenticated notification targets wait without exposing a route', () => {
-  for (const pendingIntent of [ALERT_INTENT, TEST_INTENT]) {
+test('unauthenticated and router-not-ready taps wait', () => {
+  for (const options of [
+    { authChecked: true, navigationReady: true, isAuthenticated: false },
+    { authChecked: false, navigationReady: false, isAuthenticated: false },
+    { authChecked: true, navigationReady: false, isAuthenticated: true },
+  ]) {
     assert.deepEqual(
       resolvePendingNotificationAction({
-        authChecked: true,
-        navigationReady: true,
-        isAuthenticated: false,
-        pendingIntent,
+        ...options,
+        pendingIntent: ALERT_INTENT,
+        now: NOW,
       }),
       { type: 'wait' }
     );
   }
 });
 
-test('authenticated classroom and provider targets resolve separately', () => {
+test('authenticated background tap resolves an app-constructed alert target', () => {
   assert.deepEqual(
     resolvePendingNotificationAction({
       authChecked: true,
       navigationReady: true,
       isAuthenticated: true,
       pendingIntent: ALERT_INTENT,
+      now: NOW,
     }),
-    { type: 'navigate-alert', alertId: '42' }
+    {
+      type: 'navigate-alert',
+      alertId: 42,
+      eventId: EVENT_ID,
+      severity: 'HIGH',
+      triggerType: 'TEST',
+      isTest: true,
+    }
   );
+});
+
+test('cold-start provider tap resolves only after auth and router readiness', () => {
   assert.deepEqual(
     resolvePendingNotificationAction({
       authChecked: true,
       navigationReady: true,
       isAuthenticated: true,
       pendingIntent: TEST_INTENT,
+      now: NOW,
     }),
     {
       type: 'navigate-provider-test',
@@ -82,56 +116,39 @@ test('authenticated classroom and provider targets resolve separately', () => {
   );
 });
 
-test('cold-start targets wait for router and authentication restoration', () => {
-  assert.deepEqual(
-    resolvePendingNotificationAction({
-      authChecked: false,
-      navigationReady: false,
-      isAuthenticated: false,
-      pendingIntent: TEST_INTENT,
-    }),
-    { type: 'wait' }
+test('stored intents reject unknown keys, conflicts, malformed IDs, and staleness', () => {
+  assert.deepEqual(parseStoredNotificationIntent(ALERT_INTENT, NOW), ALERT_INTENT);
+  for (const invalid of [
+    { ...ALERT_INTENT, route: '/arbitrary' },
+    { ...ALERT_INTENT, alertId: 0 },
+    { ...ALERT_INTENT, eventId: 'invalid' },
+    { ...ALERT_INTENT, triggerType: 'KEYWORD' },
+    { ...ALERT_INTENT, severity: 'high' },
+    { type: 'classroom_alert', alertId: 42 },
+    { ...TEST_INTENT, testId: '' },
+  ]) {
+    assert.equal(parseStoredNotificationIntent(invalid, NOW), null);
+  }
+  assert.equal(
+    parseStoredNotificationIntent(
+      ALERT_INTENT,
+      NOW + MAX_PENDING_NOTIFICATION_AGE_MS + 1
+    ),
+    null
   );
-  assert.deepEqual(
-    resolvePendingNotificationAction({
-      authChecked: true,
-      navigationReady: false,
-      isAuthenticated: true,
-      pendingIntent: TEST_INTENT,
-    }),
-    { type: 'wait' }
-  );
-});
-
-test('missing or malformed stored targets never navigate', () => {
   assert.deepEqual(
     resolvePendingNotificationAction({
       authChecked: true,
       navigationReady: true,
       isAuthenticated: true,
-      pendingIntent: null,
+      pendingIntent: ALERT_INTENT,
+      now: NOW + MAX_PENDING_NOTIFICATION_AGE_MS + 1,
     }),
     { type: 'none' }
   );
-  for (const invalid of [
-    { type: 'provider_test', route: '/arbitrary' },
-    { type: 'provider_test', testId: '', receivedAt: RECEIVED_AT },
-    { type: 'provider_test', testId: 'safe', receivedAt: 'invalid' },
-    {
-      type: 'provider_test',
-      testId: 'safe',
-      receivedAt: RECEIVED_AT,
-      route: '/arbitrary',
-    },
-    { type: 'classroom_alert', alertId: '0' },
-    { type: 'unsupported', testId: 'safe' },
-  ]) {
-    assert.equal(parseStoredNotificationIntent(invalid), null);
-  }
 });
 
-test('stored test intent round-trips and its display ID is masked', () => {
-  assert.deepEqual(parseStoredNotificationIntent(TEST_INTENT), TEST_INTENT);
+test('provider test display IDs are masked', () => {
   assert.equal(maskProviderTestId('safe-test-id'), 'sa••••id');
   assert.equal(maskProviderTestId('abc'), '••••');
   assert.equal(maskProviderTestId('invalid value'), 'Unavailable');
