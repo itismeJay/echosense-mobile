@@ -1,12 +1,27 @@
 import axios from 'axios';
+import * as Device from 'expo-device';
 import * as SecureStore from 'expo-secure-store';
-import { API_BASE_URL, SERVER_SWITCHING_ENABLED } from './constants';
+import { Platform } from 'react-native';
+import {
+  API_BASE_URL,
+  APP_ENVIRONMENT,
+  SERVER_SWITCHING_ENABLED,
+} from './constants';
 import {
   HEALTH_CHECK_TIMEOUT_MS,
   isAllowedServerUrl,
   isHealthyResponse,
   parseServerAddress,
+  type ServerRules,
 } from './serverConfig.ts';
+
+/** localhost is the Mac only on the iOS Simulator, and only in development. */
+export const SERVER_RULES: ServerRules = {
+  allowLoopback:
+    APP_ENVIRONMENT === 'development' &&
+    Platform.OS === 'ios' &&
+    !Device.isDevice,
+};
 
 const SERVER_URL_KEY = 'echosense_server_url_v1';
 const listeners = new Set<(url: string) => void>();
@@ -29,8 +44,8 @@ export async function loadSavedServer(): Promise<string> {
   if (!SERVER_SWITCHING_ENABLED) return currentServerUrl;
   try {
     const saved = await SecureStore.getItemAsync(SERVER_URL_KEY);
-    const parsed = saved ? parseServerAddress(saved) : null;
-    if (parsed?.ok && isAllowedServerUrl(parsed.url)) {
+    const parsed = saved ? parseServerAddress(saved, SERVER_RULES) : null;
+    if (parsed?.ok && isAllowedServerUrl(parsed.url, SERVER_RULES)) {
       currentServerUrl = parsed.url;
     }
   } catch {

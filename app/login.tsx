@@ -18,7 +18,12 @@ import {
   wakeup,
 } from '../lib/auth';
 import { SERVER_SWITCHING_ENABLED } from '../lib/constants';
-import { checkServerHealth, getServerUrl, saveServer } from '../lib/server';
+import {
+  SERVER_RULES,
+  checkServerHealth,
+  getServerUrl,
+  saveServer,
+} from '../lib/server';
 import {
   LIVE_SERVER_URL,
   describeServer,
@@ -204,6 +209,7 @@ function ServerOption({
     setMessage(null);
     const result = await switchServer(mode === 'live' ? LIVE_SERVER_URL : address, {
       currentUrl: getServerUrl(),
+      rules: SERVER_RULES,
       checkHealth: checkServerHealth,
       hasSession: async () => Boolean(await getToken()),
       detachPushToken: clearPushToken,
@@ -282,7 +288,11 @@ function ServerOption({
               autoCapitalize="none"
               autoCorrect={false}
               keyboardType="url"
-              hint="The computer running the EchoSense backend, on the same Wi-Fi."
+              hint={
+                SERVER_RULES.allowLoopback
+                  ? 'The computer running the EchoSense backend. On this simulator, http://localhost:8000 also works.'
+                  : 'The computer running the EchoSense backend, on the same Wi-Fi.'
+              }
             />
           ) : null}
           <Button

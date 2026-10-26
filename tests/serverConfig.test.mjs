@@ -228,3 +228,48 @@ test('cleartext is allowed for demo and LAN development builds only', async () =
   assert.match(config, /if \(!isDevelopment && !apiBaseUrl\.startsWith\('https:\/\/'\)\)/);
   assert.doesNotMatch(config, /NSAllowsArbitraryLoads/);
 });
+
+test('localhost is refused by default and allowed only with the simulator rule', () => {
+  for (const value of ['http://localhost:8000', 'localhost:8000', 'http://127.0.0.1:8000']) {
+    assert.equal(parseServerAddress(value).ok, false, value);
+    assert.equal(parseServerAddress(value, { allowLoopback: false }).ok, false, value);
+  }
+  assert.deepEqual(parseServerAddress('localhost:8000', { allowLoopback: true }), {
+    ok: true,
+    url: 'http://localhost:8000',
+  });
+  assert.deepEqual(parseServerAddress('http://127.0.0.1:8000/', { allowLoopback: true }), {
+    ok: true,
+    url: 'http://127.0.0.1:8000',
+  });
+  // The rule never opens public hosts or other loopback-looking names.
+  assert.equal(parseServerAddress('http://8.8.8.8', { allowLoopback: true }).ok, false);
+  assert.equal(parseServerAddress('http://localhost.evil.com', { allowLoopback: true }).ok, false);
+  assert.equal(parseServerAddress('http://127.0.0.2:8000', { allowLoopback: true }).ok, false);
+});
+
+test('the request guard follows the same loopback rule', () => {
+  assert.equal(isAllowedServerUrl('http://localhost:8000'), false);
+  assert.equal(isAllowedServerUrl('http://localhost:8000', { allowLoopback: true }), true);
+  assert.equal(isAllowedServerUrl('http://example.com', { allowLoopback: true }), false);
+});
+
+test('switching to localhost uses the rules it is given', async () => {
+  const refused = switchDependencies();
+  assert.equal((await switchServer('http://localhost:8000', refused.values)).status, 'invalid');
+  assert.deepEqual(refused.calls, []);
+  const allowed = switchDependencies({ rules: { allowLoopback: true } });
+  assert.deepEqual(await switchServer('http://localhost:8000', allowed.values), {
+    status: 'switched',
+    url: 'http://localhost:8000',
+    signedOut: true,
+  });
+});
+
+test('the loopback rule is limited to development builds on the iOS Simulator', async () => {
+  const server = await readFile(path.join(root, 'lib/server.ts'), 'utf8');
+  assert.match(
+    server,
+    /allowLoopback:\s+APP_ENVIRONMENT === 'development' &&\s+Platform\.OS === 'ios' &&\s+!Device\.isDevice/
+  );
+});

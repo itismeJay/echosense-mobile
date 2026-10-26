@@ -23,12 +23,27 @@ export function isPrivateLanHost(host: string): boolean {
   );
 }
 
+export interface ServerRules {
+  /**
+   * Allow http://localhost and 127.0.0.1. Only true for development builds on
+   * the iOS Simulator, where localhost is the Mac running the backend.
+   */
+  allowLoopback?: boolean;
+}
+
+export function isLoopbackHost(host: string): boolean {
+  return host === 'localhost' || host === '127.0.0.1';
+}
+
 /**
  * Validate a server address typed on the login screen. The live server is
  * always allowed; anything else must be a private LAN IPv4 address, so plain
  * HTTP never leaves the local network.
  */
-export function parseServerAddress(input: string): ServerAddressResult {
+export function parseServerAddress(
+  input: string,
+  rules: ServerRules = {}
+): ServerAddressResult {
   let value = input.trim().replace(/\/+$/, '');
   if (!value) {
     return { ok: false, error: 'Enter a server address.' };
@@ -62,7 +77,9 @@ export function parseServerAddress(input: string): ServerAddressResult {
       error: 'Enter only the address and port, like http://192.168.1.20:8000.',
     };
   }
-  if (!isPrivateLanHost(parsed.hostname)) {
+  const loopbackAllowed =
+    rules.allowLoopback === true && isLoopbackHost(parsed.hostname);
+  if (!isPrivateLanHost(parsed.hostname) && !loopbackAllowed) {
     return {
       ok: false,
       error:
@@ -76,11 +93,18 @@ export function parseServerAddress(input: string): ServerAddressResult {
  * Plain HTTP is allowed only to a private LAN address. Android cannot limit
  * cleartext traffic to IP ranges, so the app enforces it on every request.
  */
-export function isAllowedServerUrl(url: string): boolean {
+export function isAllowedServerUrl(
+  url: string,
+  rules: ServerRules = {}
+): boolean {
   try {
     const parsed = new URL(url);
     if (parsed.protocol === 'https:') return true;
-    return parsed.protocol === 'http:' && isPrivateLanHost(parsed.hostname);
+    return (
+      parsed.protocol === 'http:' &&
+      (isPrivateLanHost(parsed.hostname) ||
+        (rules.allowLoopback === true && isLoopbackHost(parsed.hostname)))
+    );
   } catch {
     return false;
   }
@@ -116,6 +140,7 @@ export type ServerSwitchResult =
 
 export interface ServerSwitchDependencies {
   currentUrl: string;
+  rules?: ServerRules;
   checkHealth: (url: string) => Promise<boolean>;
   hasSession: () => Promise<boolean>;
   /** Detach this device's push token from the old server, best effort. */
@@ -134,7 +159,7 @@ export async function switchServer(
   input: string,
   dependencies: ServerSwitchDependencies
 ): Promise<ServerSwitchResult> {
-  const parsed = parseServerAddress(input);
+  const parsed = parseServerAddress(input, dependencies.rules);
   if (!parsed.ok) return { status: 'invalid', error: parsed.error };
   if (parsed.url === dependencies.currentUrl) return { status: 'unchanged' };
 

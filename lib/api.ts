@@ -5,7 +5,7 @@ import {
   logout,
   notifyPasswordChangeRequired,
 } from './auth';
-import { checkServerHealth, getServerUrl } from './server';
+import { SERVER_RULES, checkServerHealth, getServerUrl } from './server';
 import { isAllowedServerUrl } from './serverConfig.ts';
 import {
   bearerToken,
@@ -32,7 +32,7 @@ const client = axios.create({
 client.interceptors.request.use(async (config) => {
   const serverUrl = getServerUrl();
   // Demo builds allow cleartext HTTP at the OS level; only LAN hosts may use it.
-  if (!isAllowedServerUrl(serverUrl)) {
+  if (!isAllowedServerUrl(serverUrl, SERVER_RULES)) {
     throw new Error('Plain HTTP is only allowed to a local network address');
   }
   config.baseURL = serverUrl;
