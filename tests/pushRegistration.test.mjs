@@ -7,6 +7,8 @@ import {
 } from '../lib/pushRegistration.ts';
 
 const FAKE_TOKEN = 'ExpoPushToken[synthetic-test-token]';
+const SERVER = 'http://192.168.1.81:8000';
+const OTHER_SERVER = 'https://echosense-backend-75h3.onrender.com';
 
 function dependencies(overrides = {}) {
   const calls = {
@@ -18,6 +20,8 @@ function dependencies(overrides = {}) {
   };
   const values = {
     userId: 'synthetic-user-42',
+    serverUrl: SERVER,
+    passwordChangePending: false,
     isPhysicalDevice: true,
     isSupportedBuild: true,
     getPermissionStatus: async () => {
@@ -100,7 +104,7 @@ test('generated fake Expo token is registered and associated with user cache', a
   assert.deepEqual(result, { status: 'registered', token: FAKE_TOKEN });
   assert.deepEqual(calls.registrations, [FAKE_TOKEN]);
   assert.deepEqual(calls.stored, [
-    { userId: 'synthetic-user-42', token: FAKE_TOKEN },
+    { userId: 'synthetic-user-42', token: FAKE_TOKEN, serverUrl: SERVER },
   ]);
 });
 
@@ -109,6 +113,7 @@ test('same user and token are not registered twice', async () => {
     getStoredRegistration: async () => ({
       userId: 'synthetic-user-42',
       token: FAKE_TOKEN,
+      serverUrl: SERVER,
     }),
   });
   const result = await runPushRegistration(values);
@@ -129,7 +134,96 @@ test('a token cached for another user is registered to the authenticated user', 
   assert.deepEqual(calls.stored[0], {
     userId: 'synthetic-user-42',
     token: FAKE_TOKEN,
+    serverUrl: SERVER,
   });
+});
+
+test('a token stored for another server registers again on the new server', async () => {
+  const { calls, values } = dependencies({
+    getStoredRegistration: async () => ({
+      userId: 'synthetic-user-42',
+      token: FAKE_TOKEN,
+      serverUrl: OTHER_SERVER,
+    }),
+  });
+  const result = await runPushRegistration(values);
+  assert.equal(result.status, 'registered');
+  assert.deepEqual(calls.registrations, [FAKE_TOKEN]);
+  assert.equal(calls.stored[0].serverUrl, SERVER);
+});
+
+test('a registration stored before server tracking registers again', async () => {
+  const { calls, values } = dependencies({
+    getStoredRegistration: async () => ({
+      userId: 'synthetic-user-42',
+      token: FAKE_TOKEN,
+    }),
+  });
+  const result = await runPushRegistration(values);
+  assert.equal(result.status, 'registered');
+  assert.equal(calls.registrations.length, 1);
+});
+
+test('nothing is requested or sent while a password change is pending', async () => {
+  const { calls, values } = dependencies({ passwordChangePending: true });
+  const result = await runPushRegistration(values);
+  assert.deepEqual(result, { status: 'password-change-pending' });
+  assert.equal(calls.permissionChecks, 0);
+  assert.equal(calls.permissionRequests, 0);
+  assert.equal(calls.tokenRequests, 0);
+  assert.deepEqual(calls.registrations, []);
+  assert.deepEqual(calls.stored, []);
+});
+
+test('a 403 password_change_required from /users/push-token is not a failure and is not stored', async () => {
+  const forbidden = Object.assign(new Error('Forbidden'), {
+    status: 403,
+    detail: 'password_change_required',
+  });
+  let attempts = 0;
+  const { calls, values } = dependencies({
+    registerToken: async () => {
+      attempts += 1;
+      throw forbidden;
+    },
+    isPasswordChangeRequiredError: (caught) =>
+      caught?.status === 403 && caught?.detail === 'password_change_required',
+  });
+  const result = await runPushRegistration(values);
+  assert.deepEqual(result, { status: 'password-change-pending' });
+  // One attempt only: runPushRegistration never retries by itself.
+  assert.equal(attempts, 1);
+  assert.deepEqual(calls.stored, []);
+});
+
+test('other 403s from /users/push-token stay registration failures', async () => {
+  const { values } = dependencies({
+    registerToken: async () => {
+      throw Object.assign(new Error('Forbidden'), {
+        status: 403,
+        detail: 'school_inactive',
+      });
+    },
+    isPasswordChangeRequiredError: (caught) =>
+      caught?.detail === 'password_change_required',
+  });
+  const result = await runPushRegistration(values);
+  assert.deepEqual(result, { status: 'registration-failed' });
+});
+
+test('registration happens right after the password change clears the flag', async () => {
+  const pending = dependencies({ passwordChangePending: true });
+  assert.equal(
+    (await runPushRegistration(pending.values)).status,
+    'password-change-pending'
+  );
+  assert.deepEqual(pending.calls.registrations, []);
+
+  // Same user, flag cleared by POST /auth/change-password + /auth/me.
+  const changed = dependencies({ passwordChangePending: false });
+  const result = await runPushRegistration(changed.values);
+  assert.equal(result.status, 'registered');
+  assert.deepEqual(changed.calls.registrations, [FAKE_TOKEN]);
 });
 
 test('token and backend failures are returned without crashing', async () => {

@@ -221,8 +221,9 @@ function parseAlert(value: unknown, index: number, endpoint: string): Alert {
       `${path}.duration must be a non-negative number`
     );
   }
+  // location is optional in the backend schema; a classroom name stands in.
   if (
-    typeof value.location !== 'string' ||
+    (typeof value.location !== 'string' && value.location != null) ||
     typeof value.status !== 'string' ||
     typeof value.created_at !== 'string' ||
     Number.isNaN(Date.parse(value.created_at))
@@ -278,8 +279,15 @@ function parseAlert(value: unknown, index: number, endpoint: string): Alert {
     review_notice: optionalString(value, 'review_notice'),
     confidence: value.confidence,
     duration: value.duration,
-    location: value.location,
+    location:
+      typeof value.location === 'string'
+        ? value.location
+        : typeof value.classroom_name === 'string'
+          ? value.classroom_name
+          : '',
     status: value.status,
+    school_name: optionalString(value, 'school_name'),
+    classroom_name: optionalString(value, 'classroom_name'),
     created_at: value.created_at,
     transcript: optionalString(value, 'transcript'),
     transcribed_text: optionalString(value, 'transcribed_text'),

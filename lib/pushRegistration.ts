@@ -6,6 +6,7 @@ export type PushRegistrationResult =
   | {
       status:
         | 'not-authenticated'
+        | 'password-change-pending'
         | 'physical-device-required'
         | 'unsupported-build'
         | 'channel-setup-failed'
@@ -20,10 +21,19 @@ export type PushRegistrationResult =
 export interface StoredPushRegistration {
   userId: string;
   token: string;
+  /** The server the token was sent to. Missing on older stored registrations. */
+  serverUrl?: string;
 }
 
 export interface PushRegistrationDependencies {
   userId: string | null;
+  serverUrl: string;
+  /**
+   * The backend answers 403 to /users/push-token until the forced password
+   * change is done, so registration waits for it instead of failing.
+   */
+  passwordChangePending: boolean;
+  isPasswordChangeRequiredError?: (caught: unknown) => boolean;
   isPhysicalDevice: boolean;
   isSupportedBuild: boolean;
   getPermissionStatus: () => Promise<PermissionStatus>;
@@ -43,6 +53,9 @@ export async function runPushRegistration(
 ): Promise<PushRegistrationResult> {
   const {
     userId,
+    serverUrl,
+    passwordChangePending,
+    isPasswordChangeRequiredError,
     isPhysicalDevice,
     isSupportedBuild,
     getPermissionStatus,
@@ -54,6 +67,7 @@ export async function runPushRegistration(
   } = dependencies;
 
   if (!userId) return { status: 'not-authenticated' };
+  if (passwordChangePending) return { status: 'password-change-pending' };
   if (!isPhysicalDevice) return { status: 'physical-device-required' };
   if (!isSupportedBuild) return { status: 'unsupported-build' };
 
@@ -88,18 +102,24 @@ export async function runPushRegistration(
   } catch {
     return { status: 'storage-unavailable' };
   }
-  if (stored?.userId === userId && stored.token === token) {
+  if (
+    stored?.userId === userId &&
+    stored.token === token &&
+    stored.serverUrl === serverUrl
+  ) {
     return { status: 'already-registered', token };
   }
 
   try {
     await registerToken(token);
-  } catch {
-    return { status: 'registration-failed' };
+  } catch (caught: unknown) {
+    return isPasswordChangeRequiredError?.(caught)
+      ? { status: 'password-change-pending' }
+      : { status: 'registration-failed' };
   }
 
   try {
-    await storeRegistration({ userId, token });
+    await storeRegistration({ userId, token, serverUrl });
   } catch {
     return { status: 'storage-unavailable' };
   }

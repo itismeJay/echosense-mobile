@@ -1,6 +1,23 @@
 import axios from 'axios';
-import { API_BASE_URL } from './constants';
-import { getToken, logout } from './auth';
+import {
+  clearLocalPushRegistration,
+  getToken,
+  logout,
+  notifyPasswordChangeRequired,
+} from './auth';
+import { checkServerHealth, getServerUrl } from './server';
+import { isAllowedServerUrl } from './serverConfig.ts';
+import {
+  bearerToken,
+  classifyAuthFailure,
+  handleAuthFailure,
+} from './session.ts';
+import {
+  alertListParams,
+  buildReviewRequest,
+  type AlertListTab,
+  type ReviewStatus,
+} from './review.ts';
 import type { Alert, AlertSeverity, LogStats } from './types';
 import {
   parseAlertListResponse,
@@ -8,12 +25,17 @@ import {
 } from './alertContract';
 
 const client = axios.create({
-  baseURL: API_BASE_URL,
   timeout: 20_000,
   headers: { 'Content-Type': 'application/json' },
 });
 
 client.interceptors.request.use(async (config) => {
+  const serverUrl = getServerUrl();
+  // Demo builds allow cleartext HTTP at the OS level; only LAN hosts may use it.
+  if (!isAllowedServerUrl(serverUrl)) {
+    throw new Error('Plain HTTP is only allowed to a local network address');
+  }
+  config.baseURL = serverUrl;
   const token = await getToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -24,30 +46,56 @@ client.interceptors.request.use(async (config) => {
 client.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.response?.status === 401) {
-      const authorization =
-        error.config?.headers?.Authorization ??
-        error.config?.headers?.get?.('Authorization');
-      const failedToken =
-        typeof authorization === 'string' &&
-        authorization.startsWith('Bearer ')
-          ? authorization.slice('Bearer '.length)
-          : null;
-      const currentToken = await getToken();
-
-      // Ignore a delayed 401 from a request that used an older token. It must
-      // not invalidate a session created while that request was in flight.
-      if (failedToken && currentToken === failedToken) {
-        await logout();
-      }
-    }
+    const failure = classifyAuthFailure(
+      error.response?.status,
+      error.response?.data?.detail
+    );
+    const failedToken = bearerToken(
+      error.config?.headers?.Authorization ??
+        error.config?.headers?.get?.('Authorization')
+    );
+    await handleAuthFailure(failure, failedToken, {
+      getToken,
+      signOut: logout,
+      clearLocalPushRegistration,
+      onPasswordChangeRequired: notifyPasswordChangeRequired,
+    });
     return Promise.reject(error);
   }
 );
 
-export async function fetchAlerts(): Promise<Alert[]> {
-  const { data } = await client.get<unknown>('/alerts/');
+export async function fetchAlerts(
+  tab: AlertListTab = 'all'
+): Promise<Alert[]> {
+  const { data } = await client.get<unknown>('/alerts/', {
+    params: alertListParams(tab),
+  });
   return parseAlertListResponse(data, '/alerts/');
+}
+
+export async function reviewAlert(
+  alertId: number,
+  status: ReviewStatus
+): Promise<Alert> {
+  const { path, body } = buildReviewRequest(alertId, status);
+  const { data } = await client.post<unknown>(path, body);
+  return parseAlertResponse(data, path);
+}
+
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string
+): Promise<unknown> {
+  const { data } = await client.post<unknown>('/auth/change-password', {
+    current_password: currentPassword,
+    new_password: newPassword,
+  });
+  return data;
+}
+
+export async function fetchMe(): Promise<unknown> {
+  const { data } = await client.get<unknown>('/auth/me');
+  return data;
 }
 
 export async function fetchLogs(): Promise<Alert[]> {
@@ -94,13 +142,14 @@ export async function clearPushToken(): Promise<void> {
   await client.post('/users/push-token', { token: '' });
 }
 
+export function getErrorDetail(caught: unknown): unknown {
+  return axios.isAxiosError(caught)
+    ? (caught.response?.data as { detail?: unknown } | undefined)?.detail
+    : undefined;
+}
+
 export async function checkConnectivity(): Promise<boolean> {
-  try {
-    await client.get('/alerts/', { timeout: 15000 });
-    return true;
-  } catch {
-    return false;
-  }
+  return checkServerHealth(getServerUrl());
 }
 
 export function normalizeSeverity(raw: string): AlertSeverity {

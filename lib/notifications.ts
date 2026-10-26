@@ -13,9 +13,17 @@ import {
   parseStoredNotificationIntent,
   type PendingNotificationIntent,
 } from './notificationNavigation';
-import { API_HOST } from './constants';
+import { getApiHost } from './apiConfig';
+import { getServerUrl } from './server';
+import { setLocalPushCleaner } from './auth';
 import { ANDROID_NOTIFICATION_CHANNELS } from './notificationChannels';
-import { clearPushToken, postPushToken } from './api';
+import {
+  clearPushToken,
+  getErrorDetail,
+  getHttpStatus,
+  postPushToken,
+} from './api';
+import { classifyAuthFailure } from './session.ts';
 import {
   runPushRegistration,
   type PushRegistrationResult,
@@ -40,7 +48,7 @@ const PENDING_ALERT_KEY = 'pending_notification_alert_id';
 const PENDING_NOTIFICATION_INTENT_KEY = 'pending_notification_intent_v2';
 let pushLifecycleGeneration = 0;
 let pushRegistrationInFlight: {
-  userId: string | null;
+  key: string;
   promise: Promise<PushRegistrationResult>;
 } | null = null;
 let lastPushRegistrationStatus: PushRegistrationStatus = 'not-attempted';
@@ -81,36 +89,61 @@ async function getStoredPushRegistration(): Promise<StoredPushRegistration | nul
   try {
     const parsed = JSON.parse(raw) as Partial<StoredPushRegistration>;
     return typeof parsed.userId === 'string' && typeof parsed.token === 'string'
-      ? { userId: parsed.userId, token: parsed.token }
+      ? {
+          userId: parsed.userId,
+          token: parsed.token,
+          serverUrl:
+            typeof parsed.serverUrl === 'string' ? parsed.serverUrl : undefined,
+        }
       : null;
   } catch {
     return null;
   }
 }
 
+function isPasswordChangeRequiredError(caught: unknown): boolean {
+  return (
+    classifyAuthFailure(getHttpStatus(caught), getErrorDetail(caught)) ===
+    'password-change-required'
+  );
+}
+
 export async function syncPushRegistration(
-  userId: string | null
+  userId: string | null,
+  passwordChangePending = false
 ): Promise<PushRegistrationResult> {
-  if (
-    pushRegistrationInFlight &&
-    pushRegistrationInFlight.userId === userId
-  ) {
+  const serverUrl = getServerUrl();
+  const key = `${userId ?? ''}|${passwordChangePending}|${serverUrl}`;
+  if (pushRegistrationInFlight && pushRegistrationInFlight.key === key) {
     return pushRegistrationInFlight.promise;
   }
 
-  const promise = performPushRegistration(userId).finally(() => {
+  const promise = performPushRegistration(
+    userId,
+    passwordChangePending,
+    serverUrl
+  ).finally(() => {
     if (pushRegistrationInFlight?.promise === promise) {
       pushRegistrationInFlight = null;
     }
   });
-  pushRegistrationInFlight = { userId, promise };
+  pushRegistrationInFlight = { key, promise };
   return promise;
 }
 
 async function performPushRegistration(
-  userId: string | null
+  userId: string | null,
+  passwordChangePending: boolean,
+  serverUrl: string
 ): Promise<PushRegistrationResult> {
   const registrationGeneration = pushLifecycleGeneration;
+  if (passwordChangePending) {
+    const result: PushRegistrationResult = {
+      status: 'password-change-pending',
+    };
+    publishPushRegistrationStatus(result.status);
+    return result;
+  }
   if (
     userId &&
     Device.isDevice &&
@@ -132,6 +165,9 @@ async function performPushRegistration(
   };
   const result = await runPushRegistration({
     userId,
+    serverUrl,
+    passwordChangePending,
+    isPasswordChangeRequiredError,
     isPhysicalDevice: Device.isDevice,
     isSupportedBuild: !isExpoGo,
     getPermissionStatus: async () =>
@@ -205,7 +241,10 @@ export async function getPushDiagnostics(
   try {
     const stored = await getStoredPushRegistration();
     expoTokenRegistered = Boolean(
-      userId && stored?.userId === userId && isExpoPushTokenSafe(stored.token)
+      userId &&
+        stored?.userId === userId &&
+        stored.serverUrl === getServerUrl() &&
+        isExpoPushTokenSafe(stored.token)
     );
   } catch {
     expoTokenRegistered = null;
@@ -221,7 +260,7 @@ export async function getPushDiagnostics(
     expectedAndroidChannels: ANDROID_NOTIFICATION_CHANNELS.map(
       (channel) => channel.id
     ),
-    apiHost: API_HOST,
+    apiHost: getApiHost(getServerUrl()),
     cleanReinstallMayBeNeeded: Platform.OS === 'android',
   };
 }
@@ -230,9 +269,26 @@ function isExpoPushTokenSafe(token: string): boolean {
   return /^(?:Expo|Exponent)PushToken\[[^\]\s]+\]$/.test(token);
 }
 
+/**
+ * Detach this device's token from the backend, then forget it locally.
+ * A 401 or 403 means the backend will not accept any call for this session
+ * (expired, school deactivated, or password change pending), so there is
+ * nothing more the app can detach; the local cleanup still runs.
+ */
 export async function clearPushRegistration(): Promise<void> {
   pushLifecycleGeneration += 1;
-  await clearPushToken();
+  try {
+    await clearPushToken();
+  } catch (caught: unknown) {
+    const status = getHttpStatus(caught);
+    if (status !== 401 && status !== 403) throw caught;
+  }
+  await clearLocalPushRegistration();
+}
+
+/** Forget the stored registration so the next sign-in registers again. */
+export async function clearLocalPushRegistration(): Promise<void> {
+  pushLifecycleGeneration += 1;
   await Promise.all([
     SecureStore.deleteItemAsync(PUSH_REGISTRATION_KEY),
     SecureStore.deleteItemAsync(LEGACY_PUSH_TOKEN_KEY),
@@ -335,3 +391,5 @@ export function getNotificationAlertId(
   const parsed = parseNotificationData(data);
   return parsed?.type === 'classroom_alert' ? String(parsed.alertId) : null;
 }
+
+setLocalPushCleaner(clearLocalPushRegistration);

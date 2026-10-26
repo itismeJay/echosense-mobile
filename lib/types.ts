@@ -29,6 +29,8 @@ export interface Alert {
   location: string;
   status: string;
   created_at: string;
+  school_name?: string | null;
+  classroom_name?: string | null;
 
   // The production response currently uses transcribed_text. transcript is
   // accepted as a compatibility alias without changing stored content.
