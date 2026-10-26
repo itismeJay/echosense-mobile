@@ -1,14 +1,18 @@
+import type { ConfigContext, ExpoConfig } from 'expo/config';
+
 const PRODUCTION_API_BASE_URL =
   'https://echosense-backend-75h3.onrender.com';
 
-function resolveConfigApiBaseUrl(configuredValue = PRODUCTION_API_BASE_URL) {
+function resolveConfigApiBaseUrl(
+  configuredValue: string = PRODUCTION_API_BASE_URL
+): string {
   const trimmedValue = configuredValue.trim().replace(/\/+$/, '');
 
   if (!trimmedValue) {
     throw new Error('EXPO_PUBLIC_API_BASE_URL must not be empty');
   }
 
-  let parsed;
+  let parsed: URL;
   try {
     parsed = new URL(trimmedValue);
   } catch {
@@ -31,7 +35,7 @@ function resolveConfigApiBaseUrl(configuredValue = PRODUCTION_API_BASE_URL) {
   return parsed.origin;
 }
 
-module.exports = ({ config }) => {
+export default ({ config }: ConfigContext): ExpoConfig => {
   const apiBaseUrl = resolveConfigApiBaseUrl(
     process.env.EXPO_PUBLIC_API_BASE_URL
   );
@@ -50,6 +54,9 @@ module.exports = ({ config }) => {
 
   return {
     ...config,
+    // ConfigContext types app.json values as optional; these mirror app.json.
+    name: config.name ?? 'EchoSense',
+    slug: config.slug ?? 'echosense-mobile',
     android: {
       ...config.android,
       googleServicesFile: './google-services.json',
