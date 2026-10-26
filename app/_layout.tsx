@@ -6,6 +6,18 @@ import {
   useRootNavigationState,
 } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import {
+  IBMPlexSans_400Regular,
+  IBMPlexSans_500Medium,
+  IBMPlexSans_600SemiBold,
+  IBMPlexSans_700Bold,
+  useFonts,
+} from '@expo-google-fonts/ibm-plex-sans';
+import {
+  DarkTheme,
+  DefaultTheme,
+  ThemeProvider,
+} from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import React, {
   createContext,
@@ -13,20 +25,22 @@ import React, {
   useMemo,
   useState,
 } from 'react';
-import { AppState } from 'react-native';
+import { ActivityIndicator, AppState, StyleSheet, View, useColorScheme } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type {
   Notification,
   NotificationResponse,
 } from 'expo-notifications';
-import { COLORS } from '../lib/constants';
 import {
   restoreSession,
-  subscribeToSessionInvalidation,
+  subscribeToSessionEvents,
   wakeup,
+  type SignOutReason,
   type User,
 } from '../lib/auth';
-import { canViewReports } from '../lib/presentation';
+import { visibleTabs, type AppTab } from '../lib/access';
+import { loadSavedServer } from '../lib/server';
+import { FONTS, RADIUS, paletteFor } from '../lib/theme';
 import {
   getPendingNotificationIntent,
   clearPendingNotificationIntent,
@@ -35,7 +49,6 @@ import {
   storePendingNotificationIntent,
   syncPushRegistration,
 } from '../lib/notifications';
-import LoadingScreen from '../components/LoadingScreen';
 import { createNotificationListenerManager } from '../lib/notificationListeners';
 import { parseNotificationEnvelope } from '../lib/notificationPayload';
 import {
@@ -56,6 +69,7 @@ const notificationListenerManager =
 
 async function restoreStartupState(): Promise<{
   restoredUser: User | null;
+  signOutReason?: SignOutReason;
   pendingIntent: PendingNotificationIntent | null;
 }> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -66,9 +80,14 @@ async function restoreStartupState(): Promise<{
 
   try {
     return await Promise.race([
-      Promise.all([restoreSession(), getPendingNotificationIntent()])
-        .then(([restoredUser, pendingIntent]) => ({
-          restoredUser,
+      // The saved server must load first: the session belongs to it.
+      loadSavedServer()
+        .then(() =>
+          Promise.all([restoreSession(), getPendingNotificationIntent()])
+        )
+        .then(([restored, pendingIntent]) => ({
+          restoredUser: restored.user,
+          signOutReason: restored.reason,
           pendingIntent,
         }))
         .catch(() => fallback),
@@ -89,16 +108,35 @@ const startupStatePromise = restoreStartupState();
 interface AuthContextValue {
   isAuthenticated: boolean;
   user: User | null;
+  /** Why the last session ended, shown once on the login screen. */
+  signOutReason: SignOutReason | null;
   onSignIn: (user: User) => void;
   onSignOut: () => void;
+  onUserUpdated: (user: User) => void;
 }
 
 export const AuthContext = createContext<AuthContextValue>({
   isAuthenticated: false,
   user: null,
+  signOutReason: null,
   onSignIn: () => {},
   onSignOut: () => {},
+  onUserUpdated: () => {},
 });
+
+const TAB_ICONS: Record<AppTab, [keyof typeof Ionicons.glyphMap, keyof typeof Ionicons.glyphMap]> = {
+  alerts: ['notifications', 'notifications-outline'],
+  analytics: ['bar-chart', 'bar-chart-outline'],
+  settings: ['server', 'server-outline'],
+  profile: ['person-circle', 'person-circle-outline'],
+};
+
+const TAB_TITLES: Record<AppTab, string> = {
+  alerts: 'Alerts',
+  analytics: 'Reports',
+  settings: 'System info',
+  profile: 'Profile',
+};
 
 async function configureNotificationHandler() {
   const notifications = await getExpoNotifications();
@@ -131,9 +169,21 @@ export default function RootLayout() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [user, setUser] = useState<User | null>(null);
+  const [signOutReason, setSignOutReason] = useState<SignOutReason | null>(
+    null
+  );
   const [pendingIntent, setPendingIntent] =
     useState<PendingNotificationIntent | null>(null);
+  const [fontsLoaded, fontError] = useFonts({
+    IBMPlexSans_400Regular,
+    IBMPlexSans_500Medium,
+    IBMPlexSans_600SemiBold,
+    IBMPlexSans_700Bold,
+  });
+  const colorScheme = useColorScheme();
+  const palette = paletteFor(colorScheme);
   const insets = useSafeAreaInsets();
+  const mustChangePassword = user?.must_change_password === true;
   const navigationState = useRootNavigationState();
   const pathname = usePathname();
 
@@ -166,11 +216,17 @@ export default function RootLayout() {
     async function setup() {
       await notificationRuntimeReady;
       const notifications = await getExpoNotifications();
-      const { restoredUser, pendingIntent: storedIntent } =
-        await startupStatePromise;
+      const {
+        restoredUser,
+        signOutReason: startupReason,
+        pendingIntent: storedIntent,
+      } = await startupStatePromise;
       if (!active) return;
       setUser(restoredUser);
       setIsAuthenticated(Boolean(restoredUser));
+      if (startupReason === 'school_inactive') {
+        setSignOutReason(startupReason);
+      }
       setPendingIntent(storedIntent);
       setAuthChecked(true);
 
@@ -203,10 +259,19 @@ export default function RootLayout() {
     }
 
     void setup();
-    const unsubscribeSession = subscribeToSessionInvalidation(() => {
+    const unsubscribeSession = subscribeToSessionEvents((event) => {
       if (!active) return;
+      if (event.type === 'password-change-required') {
+        setUser((current) =>
+          current ? { ...current, must_change_password: true } : current
+        );
+        return;
+      }
       setUser(null);
       setIsAuthenticated(false);
+      setSignOutReason(
+        event.reason === 'school_inactive' ? event.reason : null
+      );
     });
 
     return () => {
@@ -217,7 +282,9 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
-    if (!user?.id) return;
+    // The backend refuses /users/push-token until the forced password change
+    // is done. Registration starts as soon as the flag clears.
+    if (!user?.id || mustChangePassword) return;
     const userId = user.id;
     let active = true;
     let stopPushLifecycle = () => {};
@@ -248,7 +315,7 @@ export default function RootLayout() {
       active = false;
       stopPushLifecycle();
     };
-  }, [user?.id]);
+  }, [user?.id, mustChangePassword]);
 
   useEffect(() => {
     if (!authChecked || !navigationState?.key) return;
@@ -257,14 +324,23 @@ export default function RootLayout() {
       router.replace('/login');
     } else if (
       isAuthenticated &&
+      mustChangePassword &&
+      pathname !== '/change-password'
+    ) {
+      // Every other screen stays blocked until the password is changed.
+      router.replace('/change-password');
+    } else if (
+      isAuthenticated &&
+      !mustChangePassword &&
       pathname === '/login' &&
       !pendingIntent
     ) {
-      router.replace('/');
+      router.replace('/alerts');
     }
   }, [
     authChecked,
     isAuthenticated,
+    mustChangePassword,
     navigationState?.key,
     pendingIntent,
     pathname,
@@ -274,7 +350,8 @@ export default function RootLayout() {
     const action = resolvePendingNotificationAction({
       authChecked,
       navigationReady: Boolean(navigationState?.key),
-      isAuthenticated,
+      // A notification opened during a forced password change waits for it.
+      isAuthenticated: isAuthenticated && !mustChangePassword,
       pendingIntent,
     });
     if (action.type === 'navigate-alert') {
@@ -306,6 +383,7 @@ export default function RootLayout() {
   }, [
     authChecked,
     isAuthenticated,
+    mustChangePassword,
     navigationState?.key,
     pendingIntent,
   ]);
@@ -314,133 +392,131 @@ export default function RootLayout() {
     () => ({
       isAuthenticated,
       user,
+      signOutReason,
       onSignIn: (signedInUser) => {
         setUser(signedInUser);
         setIsAuthenticated(true);
+        setSignOutReason(null);
       },
       onSignOut: () => {
         setUser(null);
         setIsAuthenticated(false);
         setPendingIntent(null);
       },
+      onUserUpdated: (updatedUser) => setUser(updatedUser),
     }),
-    [isAuthenticated, user]
+    [isAuthenticated, signOutReason, user]
   );
 
-  if (!authChecked) {
-    return <LoadingScreen message="Opening EchoSense…" />;
+  const navigationTheme = useMemo(() => {
+    const base = colorScheme === 'dark' ? DarkTheme : DefaultTheme;
+    return {
+      ...base,
+      colors: {
+        ...base.colors,
+        primary: palette.link,
+        background: palette.background,
+        card: palette.surface,
+        text: palette.text,
+        border: palette.line,
+      },
+    };
+  }, [colorScheme, palette]);
+
+  if (!authChecked || (!fontsLoaded && !fontError)) {
+    // Fonts may still be loading, so this avoids text in a fallback face.
+    return (
+      <View style={[styles.boot, { backgroundColor: palette.background }]}>
+        <ActivityIndicator size="large" color={palette.textMuted} />
+      </View>
+    );
   }
 
-  const showReports = canViewReports(user?.role);
+  const tabs = visibleTabs(user);
+  const hideTabBar = !isAuthenticated || mustChangePassword;
   const tabBarStyle = {
-    backgroundColor: COLORS.surface,
-    borderTopColor: COLORS.border,
+    backgroundColor: palette.surface,
+    borderTopColor: palette.line,
     borderTopWidth: 1,
-    minHeight: 60 + insets.bottom,
-    paddingTop: 6,
+    minHeight: 64 + insets.bottom,
+    paddingTop: 8,
     paddingBottom: Math.max(insets.bottom, 8),
   } as const;
 
+  function tabOptions(tab: AppTab) {
+    const [activeIcon, inactiveIcon] = TAB_ICONS[tab];
+    return {
+      href: tabs.includes(tab) && !hideTabBar ? undefined : null,
+      title: TAB_TITLES[tab],
+      tabBarAccessibilityLabel: `${TAB_TITLES[tab]} tab`,
+      tabBarIcon: ({ focused }: { focused: boolean }) => (
+        <View
+          style={[
+            styles.tabIndicator,
+            focused && { backgroundColor: palette.brand },
+          ]}
+        >
+          <Ionicons
+            name={focused ? activeIcon : inactiveIcon}
+            size={20}
+            color={focused ? palette.onBrand : palette.textMuted}
+          />
+        </View>
+      ),
+    };
+  }
+
   return (
     <AuthContext.Provider value={contextValue}>
-      <StatusBar style="dark" backgroundColor={COLORS.background} />
-      <Tabs
-        initialRouteName={isAuthenticated ? 'index' : 'login'}
-        screenOptions={({ route }) => ({
-          headerShown: false,
-          tabBarHideOnKeyboard: true,
-          tabBarStyle:
-            route.name === 'login' || !isAuthenticated
-              ? { display: 'none' }
-              : tabBarStyle,
-          tabBarActiveTintColor: COLORS.primary,
-          tabBarInactiveTintColor: COLORS.textMuted,
-          tabBarLabelStyle: {
-            fontSize: 12,
-            fontWeight: '600',
-          },
-          tabBarItemStyle: {
-            minHeight: 52,
-          },
-        })}
-      >
-        <Tabs.Screen
-          name="index"
-          options={{
-            title: 'Home',
-            tabBarAccessibilityLabel: 'Home tab',
-            tabBarIcon: ({ color, size, focused }) => (
-              <Ionicons
-                name={focused ? 'home' : 'home-outline'}
-                size={size}
-                color={color}
-              />
-            ),
+      <ThemeProvider value={navigationTheme}>
+        <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
+        <Tabs
+          initialRouteName={isAuthenticated ? 'alerts' : 'login'}
+          screenOptions={{
+            headerShown: false,
+            tabBarHideOnKeyboard: true,
+            sceneStyle: { backgroundColor: palette.background },
+            tabBarStyle: hideTabBar ? { display: 'none' } : tabBarStyle,
+            tabBarActiveTintColor: palette.text,
+            tabBarInactiveTintColor: palette.textMuted,
+            tabBarLabelStyle: {
+              fontFamily: FONTS.medium,
+              fontSize: 12,
+              marginTop: 2,
+            },
+            tabBarItemStyle: {
+              minHeight: 52,
+            },
           }}
-        />
-        <Tabs.Screen
-          name="alerts"
-          options={{
-            title: 'Alerts',
-            tabBarAccessibilityLabel: 'Alerts tab',
-            tabBarIcon: ({ color, size, focused }) => (
-              <Ionicons
-                name={focused ? 'notifications' : 'notifications-outline'}
-                size={size}
-                color={color}
-              />
-            ),
-          }}
-        />
-        <Tabs.Screen
-          name="history"
-          options={{
-            title: 'History',
-            tabBarAccessibilityLabel: 'Alert history tab',
-            tabBarIcon: ({ color, size, focused }) => (
-              <Ionicons
-                name={focused ? 'time' : 'time-outline'}
-                size={size}
-                color={color}
-              />
-            ),
-          }}
-        />
-        <Tabs.Screen
-          name="analytics"
-          options={{
-            href: showReports ? '/analytics' : null,
-            title: 'Reports',
-            tabBarAccessibilityLabel: 'Reports tab',
-            tabBarIcon: ({ color, size, focused }) => (
-              <Ionicons
-                name={focused ? 'bar-chart' : 'bar-chart-outline'}
-                size={size}
-                color={color}
-              />
-            ),
-          }}
-        />
-        <Tabs.Screen
-          name="profile"
-          options={{
-            title: 'Profile',
-            tabBarAccessibilityLabel: 'Profile tab',
-            tabBarIcon: ({ color, size, focused }) => (
-              <Ionicons
-                name={focused ? 'person-circle' : 'person-circle-outline'}
-                size={size}
-                color={color}
-              />
-            ),
-          }}
-        />
-        <Tabs.Screen name="logs" options={{ href: null }} />
-        <Tabs.Screen name="settings" options={{ href: null }} />
-        <Tabs.Screen name="login" options={{ href: null }} />
-        <Tabs.Screen name="alert/[id]" options={{ href: null }} />
-        <Tabs.Screen name="notifications/test" options={{ href: null }} />
-      </Tabs>
+        >
+          <Tabs.Screen name="alerts" options={tabOptions('alerts')} />
+          <Tabs.Screen name="analytics" options={tabOptions('analytics')} />
+          <Tabs.Screen name="settings" options={tabOptions('settings')} />
+          <Tabs.Screen name="profile" options={tabOptions('profile')} />
+          <Tabs.Screen name="index" options={{ href: null }} />
+          <Tabs.Screen name="history" options={{ href: null }} />
+          <Tabs.Screen name="logs" options={{ href: null }} />
+          <Tabs.Screen name="login" options={{ href: null }} />
+          <Tabs.Screen name="change-password" options={{ href: null }} />
+          <Tabs.Screen name="alert/[id]" options={{ href: null }} />
+          <Tabs.Screen name="notifications/test" options={{ href: null }} />
+        </Tabs>
+      </ThemeProvider>
     </AuthContext.Provider>
   );
 }
+
+const styles = StyleSheet.create({
+  boot: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabIndicator: {
+    width: 56,
+    height: 28,
+    borderRadius: RADIUS.panel + 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});

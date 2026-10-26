@@ -1,240 +1,162 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-} from 'react-native';
-import { COLORS, RADII, SPACING, TYPOGRAPHY } from '../lib/constants';
+import { Pressable, Text, View } from 'react-native';
+import { getLanguageLabel } from '../lib/alertEvidence';
 import {
   formatDateTime,
   getAlertTitle,
-  getAlertExplanation,
   getPriorityLabel,
-  humanizeStatus,
+  normalizeSeverity,
 } from '../lib/presentation';
+import { normalizeReviewStatus, reviewStatusLabel } from '../lib/review';
+import { FONTS, RADIUS, SPACE, TYPE, severityColors } from '../lib/theme';
 import type { Alert } from '../lib/types';
+import { makeStyles, useTheme } from '../lib/useTheme';
 import SeverityBadge from './SeverityBadge';
-import { getLanguageLabel } from '../lib/alertEvidence';
 
 interface Props {
   alert: Alert;
   onPress: () => void;
-  compact?: boolean;
-  showStatus?: boolean;
+  /** Super admins see alerts from every school. */
+  showSchool?: boolean;
 }
 
-export default function AlertCard({
-  alert,
-  onPress,
-  compact = false,
-  showStatus = false,
-}: Props) {
-  const location = alert.location?.trim() || 'Location unavailable';
+export default function AlertCard({ alert, onPress, showSchool = false }: Props) {
+  const palette = useTheme();
+  const styles = useStyles();
+  const severity = normalizeSeverity(alert.severity);
+  const stripe = severityColors(palette, severity).color;
+  const classroom =
+    alert.classroom_name?.trim() || alert.location?.trim() || 'Classroom unavailable';
+  const school = alert.school_name?.trim() || 'School unavailable';
+  const status = normalizeReviewStatus(alert.status);
   const accessibilityLabel = [
-    getPriorityLabel(alert.severity),
-    location,
+    `${getPriorityLabel(alert.severity)} severity`,
+    classroom,
+    showSchool ? school : null,
     formatDateTime(alert.created_at),
-    getAlertExplanation(alert.severity),
-    'Automatically generated and not independently verified.',
+    reviewStatusLabel(alert.status),
     'View details',
-  ].join('. ');
+  ]
+    .filter(Boolean)
+    .join('. ');
 
   return (
-    <TouchableOpacity
+    <Pressable
       accessible
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
-      accessibilityHint="Opens the available alert information"
-      style={styles.card}
+      accessibilityHint="Opens the alert so you can review it"
+      style={({ pressed }) => [styles.card, pressed && styles.pressed]}
       onPress={onPress}
-      activeOpacity={0.72}
     >
-      <View style={styles.topRow}>
-        <SeverityBadge severity={alert.severity} size={compact ? 'sm' : 'md'} />
-        {showStatus ? (
-          <Text style={styles.status}>{humanizeStatus(alert.status)}</Text>
-        ) : null}
-      </View>
-
-      <View style={styles.locationRow}>
-        <View style={styles.titleCopy}>
-          <Text style={styles.alertTitle}>{getAlertTitle(alert.severity)}</Text>
-          <Text style={styles.reviewIndicator}>Review required</Text>
+      <View style={[styles.stripe, { backgroundColor: stripe }]} />
+      <View style={styles.body}>
+        <View style={styles.topRow}>
+          <SeverityBadge severity={alert.severity} size="sm" />
+          <Text
+            style={[
+              styles.status,
+              status === 'active' ? styles.statusActive : null,
+            ]}
+          >
+            {reviewStatusLabel(alert.status)}
+          </Text>
         </View>
-      </View>
-
-      <View style={styles.locationRow}>
-        <Ionicons
-          name="location-outline"
-          size={19}
-          color={COLORS.textSecondary}
-          importantForAccessibility="no-hide-descendants"
-        />
-        <Text style={styles.location}>{location}</Text>
-      </View>
-
-      <View style={styles.timeRow}>
-        <Ionicons
-          name="time-outline"
-          size={17}
-          color={COLORS.textMuted}
-          importantForAccessibility="no-hide-descendants"
-        />
-        <Text style={styles.time}>{formatDateTime(alert.created_at)}</Text>
-      </View>
-
-      <View style={styles.timeRow}>
-        <Ionicons
-          name="language-outline"
-          size={17}
-          color={COLORS.textMuted}
-          importantForAccessibility="no-hide-descendants"
-        />
-        <Text style={styles.time}>
-          {getLanguageLabel(alert.language)}
-        </Text>
-      </View>
-
-      {!compact ? (
-        <>
-          <Text style={styles.explanation}>{getAlertExplanation(alert.severity)}</Text>
-          <View style={styles.notice}>
+        <Text style={styles.classroom}>{classroom}</Text>
+        {showSchool ? (
+          <View style={styles.metaRow}>
             <Ionicons
-              name="information-circle-outline"
-              size={18}
-              color={COLORS.textSecondary}
+              name="business-outline"
+              size={14}
+              color={palette.textMuted}
               importantForAccessibility="no-hide-descendants"
             />
-            <Text style={styles.noticeText}>
-              Automatically generated alert. This information has not yet been
-              independently verified.
-            </Text>
+            <Text style={styles.meta}>{school}</Text>
           </View>
-        </>
-      ) : (
-        <Text style={styles.compactNotice}>
-          Automatically generated alert; not independently verified.
-        </Text>
-      )}
-
-      <View style={styles.actionRow}>
-        <Text style={styles.actionText}>View details</Text>
-        <Ionicons
-          name="chevron-forward"
-          size={18}
-          color={COLORS.primary}
-          importantForAccessibility="no-hide-descendants"
-        />
+        ) : null}
+        <Text style={styles.summary}>{getAlertTitle(alert.severity)}</Text>
+        <View style={styles.footer}>
+          <Text style={styles.meta}>
+            {formatDateTime(alert.created_at)} · {getLanguageLabel(alert.language)}
+          </Text>
+          <Ionicons
+            name="chevron-forward"
+            size={18}
+            color={palette.textMuted}
+            importantForAccessibility="no-hide-descendants"
+          />
+        </View>
       </View>
-    </TouchableOpacity>
+    </Pressable>
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((palette) => ({
   card: {
-    backgroundColor: COLORS.surface,
-    borderRadius: RADII.lg,
+    flexDirection: 'row',
+    overflow: 'hidden',
+    backgroundColor: palette.surface,
+    borderRadius: RADIUS.panel,
     borderWidth: 1,
-    borderColor: COLORS.border,
-    padding: SPACING.lg,
-    gap: SPACING.md,
-    marginBottom: SPACING.md,
-    shadowColor: COLORS.shadow,
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
+    borderColor: palette.line,
+    marginBottom: SPACE.sm,
+  },
+  pressed: {
+    backgroundColor: palette.surfaceMuted,
+  },
+  stripe: {
+    width: 4,
+  },
+  body: {
+    flex: 1,
+    padding: SPACE.md,
+    paddingLeft: SPACE.md,
+    gap: SPACE.xs,
   },
   topRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: SPACING.sm,
-    flexWrap: 'wrap',
+    gap: SPACE.sm,
+    marginBottom: 2,
   },
   status: {
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.caption,
-    fontWeight: '600',
-    flexShrink: 1,
+    color: palette.textMuted,
+    fontFamily: FONTS.medium,
+    ...TYPE.small,
   },
-  locationRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: SPACING.sm,
+  statusActive: {
+    color: palette.text,
+    fontFamily: FONTS.semibold,
   },
-  titleCopy: {
-    flex: 1,
-    gap: SPACING.xs,
+  classroom: {
+    color: palette.text,
+    fontFamily: FONTS.semibold,
+    ...TYPE.bodyLarge,
   },
-  alertTitle: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.cardTitle,
-    fontWeight: '800',
-    lineHeight: 23,
+  summary: {
+    color: palette.textMuted,
+    fontFamily: FONTS.regular,
+    ...TYPE.body,
   },
-  reviewIndicator: {
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.caption,
-    fontWeight: '700',
-  },
-  location: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.cardTitle,
-    fontWeight: '700',
-    flex: 1,
-    lineHeight: 23,
-  },
-  timeRow: {
+  metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: SPACING.sm,
+    gap: SPACE.xs,
   },
-  time: {
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.secondary,
-    flex: 1,
-    lineHeight: 20,
-  },
-  explanation: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.body,
-    lineHeight: 23,
-  },
-  notice: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: SPACING.sm,
-    padding: SPACING.md,
-    backgroundColor: COLORS.surfaceSecondary,
-    borderRadius: RADII.md,
-  },
-  noticeText: {
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.caption,
-    lineHeight: 19,
-    flex: 1,
-  },
-  compactNotice: {
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.caption,
-    lineHeight: 19,
-  },
-  actionRow: {
-    minHeight: 44,
+  footer: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: SPACING.xs,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    paddingTop: SPACING.sm,
+    justifyContent: 'space-between',
+    gap: SPACE.sm,
+    marginTop: 2,
   },
-  actionText: {
-    color: COLORS.primary,
-    fontSize: TYPOGRAPHY.secondary,
-    fontWeight: '700',
+  meta: {
+    flex: 1,
+    color: palette.textMuted,
+    fontFamily: FONTS.regular,
+    ...TYPE.small,
+    fontVariant: ['tabular-nums'],
   },
-});
+}));

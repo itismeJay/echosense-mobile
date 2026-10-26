@@ -1,14 +1,17 @@
 import React from 'react';
-import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
-import { COLORS, SPACING, TYPOGRAPHY } from '../lib/constants';
+import { ActivityIndicator, Text, View } from 'react-native';
+import { FONTS, SPACE, TYPE } from '../lib/theme';
+import { makeStyles, useTheme } from '../lib/useTheme';
 
 interface Props {
   message?: string;
 }
 
 export default function LoadingScreen({
-  message = 'Loading available information…',
+  message = 'Loading…',
 }: Props) {
+  const palette = useTheme();
+  const styles = useStyles();
   return (
     <View
       style={styles.container}
@@ -17,26 +20,25 @@ export default function LoadingScreen({
       accessibilityLabel={message}
       accessibilityLiveRegion="polite"
     >
-      <ActivityIndicator size="large" color={COLORS.primary} />
+      <ActivityIndicator size="large" color={palette.textMuted} />
       <Text style={styles.text}>{message}</Text>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((palette) => ({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: palette.background,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: SPACING.lg,
-    padding: SPACING.xxl,
+    gap: SPACE.lg,
+    padding: SPACE.xl,
   },
   text: {
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.secondary,
-    fontWeight: '500',
-    lineHeight: 21,
+    color: palette.textMuted,
+    fontFamily: FONTS.regular,
+    ...TYPE.body,
     textAlign: 'center',
   },
-});
+}));

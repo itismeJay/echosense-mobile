@@ -1,24 +1,19 @@
-import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import {
-  RADII,
-  SEVERITY_BACKGROUNDS,
-  SEVERITY_COLORS,
-  SEVERITY_ICONS,
-} from '../lib/constants';
+import { StyleSheet, Text, View } from 'react-native';
 import { getPriorityLabel, normalizeSeverity } from '../lib/presentation';
+import { FONTS, RADIUS, severityColors } from '../lib/theme';
+import { useTheme } from '../lib/useTheme';
 
 interface Props {
   severity: string;
   size?: 'sm' | 'md';
 }
 
+/** Severity is always shown as a word; the color only reinforces it. */
 export default function SeverityBadge({ severity, size = 'md' }: Props) {
+  const palette = useTheme();
   const normalized = normalizeSeverity(severity);
-  const color = SEVERITY_COLORS[normalized];
-  const backgroundColor = SEVERITY_BACKGROUNDS[normalized];
-  const iconName = SEVERITY_ICONS[normalized] as keyof typeof Ionicons.glyphMap;
+  const { color, background } = severityColors(palette, normalized);
   const label = getPriorityLabel(normalized);
   const isSmall = size === 'sm';
 
@@ -26,23 +21,13 @@ export default function SeverityBadge({ severity, size = 'md' }: Props) {
     <View
       accessible
       accessibilityRole="text"
-      accessibilityLabel={label.toLowerCase()}
-      style={[
-        styles.badge,
-        { backgroundColor, borderColor: color },
-        isSmall && styles.badgeSmall,
-      ]}
+      accessibilityLabel={
+        normalized === 'unknown' ? label : `${label} severity`
+      }
+      style={[styles.badge, { backgroundColor: background }, isSmall && styles.badgeSmall]}
     >
-      <Ionicons
-        name={iconName}
-        size={isSmall ? 13 : 15}
-        color={color}
-        importantForAccessibility="no-hide-descendants"
-      />
-      <Text
-        allowFontScaling
-        style={[styles.label, { color }, isSmall && styles.labelSmall]}
-      >
+      <View style={[styles.dot, { backgroundColor: color }]} />
+      <Text style={[styles.label, { color }, isSmall && styles.labelSmall]}>
         {label}
       </Text>
     </View>
@@ -55,24 +40,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     alignSelf: 'flex-start',
     gap: 6,
-    minHeight: 32,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: RADII.pill,
-    borderWidth: 1,
-  },
-  badgeSmall: {
     minHeight: 28,
     paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingVertical: 3,
+    borderRadius: RADIUS.tag,
+  },
+  badgeSmall: {
+    minHeight: 24,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
   label: {
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.25,
-    flexShrink: 1,
+    fontFamily: FONTS.semibold,
+    fontSize: 13,
+    lineHeight: 18,
   },
   labelSmall: {
-    fontSize: 11,
+    fontSize: 12,
+    lineHeight: 16,
   },
 });

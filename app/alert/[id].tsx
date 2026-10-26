@@ -1,39 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import React, {
-  useCallback,
-  useContext,
-  useEffect,
-  useState,
-} from 'react';
-import {
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import React, { useCallback, useContext, useEffect, useState } from 'react';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { canViewTechnicalDetails, showsSchoolOnAlerts } from '../../lib/access';
 import {
   fetchAvailableAlert,
   formatConfidence,
   getHttpStatus,
+  reviewAlert,
 } from '../../lib/api';
-import {
-  COLORS,
-  RADII,
-  SPACING,
-  TYPOGRAPHY,
-} from '../../lib/constants';
-import {
-  canViewTechnicalDetails,
-  formatDate,
-  formatTime,
-  getAlertTitle,
-  getAlertExplanation,
-  humanizeStatus,
-} from '../../lib/presentation';
-import type { Alert } from '../../lib/types';
 import {
   EVIDENCE_REVIEW_NOTE,
   getExactTranscript,
@@ -47,9 +23,24 @@ import {
   supportingEvidenceLabel,
   termCategoryEvidenceLabel,
 } from '../../lib/alertEvidence';
+import {
+  formatDateTime,
+  getAlertExplanation,
+  humanizeStatus,
+} from '../../lib/presentation';
+import {
+  getReviewActions,
+  reviewConfirmation,
+  reviewStatusLabel,
+  type ReviewStatus,
+} from '../../lib/review';
+import { FONTS, RADIUS, SPACE, TYPE } from '../../lib/theme';
+import type { Alert } from '../../lib/types';
+import { makeStyles, useTheme } from '../../lib/useTheme';
 import LoadingScreen from '../../components/LoadingScreen';
 import ScreenState from '../../components/ScreenState';
 import SeverityBadge from '../../components/SeverityBadge';
+import { Button, Card, Divider, InfoRow, Notice, SectionTitle } from '../../components/ui';
 import { AuthContext } from '../_layout';
 
 export default function AlertDetailScreen() {
@@ -60,6 +51,8 @@ export default function AlertDetailScreen() {
       notificationTest?: string | string[];
     }>();
   const { user } = useContext(AuthContext);
+  const palette = useTheme();
+  const styles = useStyles();
   const [alert, setAlert] = useState<Alert | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
@@ -67,6 +60,11 @@ export default function AlertDetailScreen() {
     'network' | 'unauthorized' | 'invalid-response' | null
   >(null);
   const [technicalExpanded, setTechnicalExpanded] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<ReviewStatus | null>(null);
+  const [reviewMessage, setReviewMessage] = useState<{
+    tone: 'neutral' | 'danger';
+    text: string;
+  } | null>(null);
 
   const alertId = Number(Array.isArray(id) ? id[0] : id);
   const trustedEventId = Array.isArray(notificationEventId)
@@ -84,6 +82,7 @@ export default function AlertDetailScreen() {
     }
 
     setLoading(true);
+    setReviewMessage(null);
     try {
       const availableAlert = await fetchAvailableAlert(alertId);
       setAlert(availableAlert);
@@ -107,6 +106,28 @@ export default function AlertDetailScreen() {
     load();
   }, [load]);
 
+  async function changeStatus(status: ReviewStatus) {
+    if (!alert || pendingStatus) return;
+    setPendingStatus(status);
+    setReviewMessage(null);
+    try {
+      const updated = await reviewAlert(alert.id, status);
+      setAlert(updated);
+      setReviewMessage({ tone: 'neutral', text: reviewConfirmation(status) });
+    } catch (caught: unknown) {
+      const httpStatus = getHttpStatus(caught);
+      setReviewMessage({
+        tone: 'danger',
+        text:
+          httpStatus === 404
+            ? 'This alert is no longer available to your account.'
+            : 'We couldn’t save that. Check your connection and try again.',
+      });
+    } finally {
+      setPendingStatus(null);
+    }
+  }
+
   function goBack() {
     if (router.canGoBack()) {
       router.back();
@@ -116,27 +137,32 @@ export default function AlertDetailScreen() {
   }
 
   if (loading) {
-    return <LoadingScreen message="Loading alert details…" />;
+    return <LoadingScreen message="Loading alert…" />;
   }
+
+  const isTestAlert =
+    alert !== null &&
+    trustedTestMarker === 'true' &&
+    typeof trustedEventId === 'string' &&
+    alert.event_id?.toLowerCase() === trustedEventId.toLowerCase();
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <View style={styles.topBar}>
-        <TouchableOpacity
+        <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Go back"
+          accessibilityLabel="Back to alerts"
           style={styles.backButton}
           onPress={goBack}
         >
           <Ionicons
             name="arrow-back"
-            size={24}
-            color={COLORS.text}
+            size={22}
+            color={palette.text}
             importantForAccessibility="no-hide-descendants"
           />
-        </TouchableOpacity>
-        <Text style={styles.topBarTitle}>Alert details</Text>
-        <View style={styles.topBarSpacer} />
+          <Text style={styles.backText}>Alerts</Text>
+        </Pressable>
       </View>
 
       {error ? (
@@ -151,17 +177,17 @@ export default function AlertDetailScreen() {
             }
             title={
               error === 'unauthorized'
-                ? 'You can’t access this alert.'
+                ? 'You can’t open this alert.'
                 : error === 'invalid-response'
-                  ? 'This alert could not be displayed safely.'
+                  ? 'This alert couldn’t be shown safely.'
                   : 'We couldn’t load this alert.'
             }
             message={
               error === 'unauthorized'
-                ? 'Sign in with an authorized staff account and try again.'
+                ? 'It belongs to a school your account can’t see.'
                 : error === 'invalid-response'
-                  ? 'The server returned alert information in an unexpected format. No evidence was inferred.'
-                  : 'Check your connection and try again. Being offline in the app does not mean the alert was lost; available alerts can synchronize when connectivity returns.'
+                  ? 'The server sent the alert in an unexpected format, so nothing was guessed.'
+                  : 'Check your connection and try again. Alerts aren’t lost while the app is offline.'
             }
             actionLabel="Try again"
             onAction={load}
@@ -172,228 +198,143 @@ export default function AlertDetailScreen() {
         <View style={styles.state}>
           <ScreenState
             icon="document-outline"
-            title="Alert information is unavailable."
-            message="This alert may no longer be included in the available alert history."
+            title="This alert isn’t available."
+            message="It may have been removed or belong to another school."
             actionLabel="Back to alerts"
             onAction={() => router.replace('/alerts')}
           />
         </View>
       ) : (
         <ScrollView
-          style={styles.scroll}
+          style={styles.flex}
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         >
-          {trustedTestMarker === 'true' &&
-          typeof trustedEventId === 'string' &&
-          alert.event_id?.toLowerCase() === trustedEventId.toLowerCase() ? (
+          {isTestAlert ? (
             <View
               accessible
-              accessibilityLabel="TEST alert data. Human review is still required."
+              accessibilityLabel="Test alert, not a real incident. Human review is still required."
               style={styles.testBanner}
             >
-              <Ionicons
-                name="flask-outline"
-                size={22}
-                color={COLORS.information}
-                importantForAccessibility="no-hide-descendants"
-              />
-              <View style={styles.testBannerCopy}>
-                <Text style={styles.testBannerTitle}>TEST alert data</Text>
-                <Text style={styles.testBannerText}>
-                  This alert was opened from a validated Phase 3 TEST
-                  notification. Human review is still required.
-                </Text>
-              </View>
+              <Text style={styles.testTitle}>Test alert, not a real incident</Text>
+              <Text style={styles.testText}>
+                Opened from a validated test notification. Human review is still
+                required.
+              </Text>
             </View>
           ) : null}
+
           <View style={styles.hero}>
+            <View style={styles.tagRow}>
+              <SeverityBadge severity={alert.severity} />
+              <Text style={styles.reviewState}>{reviewStatusLabel(alert.status)}</Text>
+            </View>
             <Text accessibilityRole="header" style={styles.title}>
-              {getAlertTitle(alert.severity)}
+              {alert.classroom_name?.trim() ||
+                alert.location?.trim() ||
+                'Classroom unavailable'}
             </Text>
-            <Text style={styles.requiredNotice}>{getReviewNotice(alert)}</Text>
-            <Text style={styles.explanation}>
-              {getAlertExplanation(alert.severity)}
-            </Text>
-            <SeverityBadge severity={alert.severity} />
+            {showsSchoolOnAlerts(user) ? (
+              <Text style={styles.school}>
+                {alert.school_name?.trim() || 'School unavailable'}
+              </Text>
+            ) : null}
+            <Text style={styles.time}>{formatDateTime(alert.created_at)}</Text>
+
+            <View style={styles.actions}>
+              {getReviewActions(alert.status).map((action) => (
+                <Button
+                  key={action.status}
+                  label={action.label}
+                  variant={action.primary ? 'primary' : 'secondary'}
+                  icon={
+                    action.status === 'active'
+                      ? 'arrow-undo-outline'
+                      : action.status === 'resolved'
+                        ? 'checkmark-done-outline'
+                        : 'checkmark-outline'
+                  }
+                  pending={pendingStatus === action.status}
+                  disabled={pendingStatus !== null}
+                  onPress={() => changeStatus(action.status)}
+                />
+              ))}
+            </View>
+            {reviewMessage ? (
+              <Notice tone={reviewMessage.tone}>{reviewMessage.text}</Notice>
+            ) : null}
+            <Notice>{getReviewNotice(alert)}</Notice>
           </View>
 
-          <View style={styles.card}>
-            <Text accessibilityRole="header" style={styles.sectionTitle}>
-              Available information
-            </Text>
-            <DetailRow
-              icon="location-outline"
-              label="Classroom or location"
-              value={alert.location?.trim() || 'Location unavailable'}
-            />
-            <View style={styles.divider} />
-            <DetailRow
-              icon="calendar-outline"
-              label="Detected date"
-              value={formatDate(alert.created_at)}
-            />
-            <View style={styles.divider} />
-            <DetailRow
-              icon="time-outline"
-              label="Detected time"
-              value={formatTime(alert.created_at)}
-            />
-            <View style={styles.divider} />
-            <DetailRow
-              icon="information-circle-outline"
-              label="Alert status"
-              value={humanizeStatus(alert.status)}
-            />
-            <View style={styles.divider} />
-            <DetailRow
-              icon="language-outline"
-              label="Transcript language"
-              value={getLanguageLabel(alert.language)}
-            />
-            {typeof alert.language_confidence === 'number' ? (
-              <>
-                <View style={styles.divider} />
-                <DetailRow
-                  icon="analytics-outline"
-                  label="Language confidence"
-                  value={formatConfidence(alert.language_confidence)}
-                />
-              </>
-            ) : null}
-            <View style={styles.divider} />
-            <DetailRow
-              icon="speedometer-outline"
-              label="Detection confidence"
-              value={formatConfidence(alert.confidence)}
-            />
-            <View style={styles.divider} />
-            <DetailRow
-              icon="hourglass-outline"
-              label="Event duration"
-              value={`${alert.duration.toFixed(1)} seconds`}
-            />
-            <View style={styles.divider} />
-            <DetailRow
-              icon="finger-print-outline"
-              label="Evidence event ID"
-              value={alert.event_id || 'Not available for this legacy alert'}
-            />
-            {alert.emotion?.trim() ? (
-              <>
-                <View style={styles.divider} />
-                <DetailRow
-                  icon="help-circle-outline"
-                  label="Possible concern category"
-                  value={humanizeStatus(alert.emotion)}
-                />
-              </>
-            ) : null}
+          <View style={styles.section}>
+            <SectionTitle>What was heard</SectionTitle>
+            <Text style={styles.muted}>{getAlertExplanation(alert.severity)}</Text>
+            <Card>
+              <Text
+                selectable
+                style={getExactTranscript(alert) ? styles.transcript : styles.unavailable}
+              >
+                {getExactTranscript(alert)
+                  ? `“${getExactTranscript(alert)}”`
+                  : 'No transcript was stored for this alert.'}
+              </Text>
+              <Text style={styles.small}>
+                {getLanguageLabel(alert.language)}
+                {typeof alert.language_confidence === 'number'
+                  ? ` · ${formatConfidence(alert.language_confidence)} sure of the language`
+                  : ''}
+              </Text>
+            </Card>
+            <Text style={styles.small}>{EVIDENCE_REVIEW_NOTE}</Text>
           </View>
 
           <SeverityEvidenceSection alert={alert} />
 
-          <View style={styles.card}>
-            <Text accessibilityRole="header" style={styles.sectionTitle}>
-              Stored transcript
-            </Text>
-            <Text
-              selectable
-              style={getExactTranscript(alert) ? styles.phrase : styles.unavailable}
-            >
-              {getExactTranscript(alert) ||
-                'No stored transcript is available for this alert.'}
-            </Text>
-            <View
-              style={styles.transcriptionNotice}
-              accessible
-              accessibilityLabel="Automatic transcription notice"
-            >
-              <Ionicons
-                name="information-circle-outline"
-                size={21}
-                color={COLORS.information}
-                importantForAccessibility="no-hide-descendants"
+          <View style={styles.section}>
+            <SectionTitle>Details</SectionTitle>
+            <Card>
+              <InfoRow
+                label="Monitored words matched"
+                value={
+                  getMatchedTermLabels(alert).join(', ') ||
+                  'No monitored words were matched.'
+                }
               />
-              <Text style={styles.noticeText}>
-                {EVIDENCE_REVIEW_NOTE}
-              </Text>
-            </View>
+              <Divider />
+              <InfoRow
+                label="Sound classification"
+                value={getYamnetExplanation(alert.yamnet_ran)}
+              />
+              <Divider />
+              <InfoRow
+                label="Categories"
+                value={
+                  alert.categories?.length
+                    ? alert.categories.map(humanizeStatus).join(', ')
+                    : 'No categories were stored.'
+                }
+              />
+              {alert.tone?.trim() || alert.emotion?.trim() ? (
+                <>
+                  <Divider />
+                  <InfoRow
+                    label="Tone"
+                    value={humanizeStatus(alert.tone?.trim() || alert.emotion?.trim() || '')}
+                  />
+                </>
+              ) : null}
+              <Divider />
+              <InfoRow
+                label="Event ID"
+                value={alert.event_id || 'Not recorded for this older alert'}
+                selectable
+              />
+            </Card>
           </View>
 
-          <View style={styles.card}>
-            <Text accessibilityRole="header" style={styles.sectionTitle}>
-              Evidence indicators
-            </Text>
-            <DetailRow
-              icon="list-outline"
-              label="Matched monitored terms"
-              value={
-                getMatchedTermLabels(alert).join(', ') ||
-                'No matched monitored terms were stored.'
-              }
-            />
-            <View style={styles.divider} />
-            <DetailRow
-              icon="pulse-outline"
-              label="Acoustic classification"
-              value={getYamnetExplanation(alert.yamnet_ran)}
-            />
-            {alert.yamnet_class?.trim() ? (
-              <>
-                <View style={styles.divider} />
-                <DetailRow
-                  icon="options-outline"
-                  label="Stored YAMNet class"
-                  value={alert.yamnet_class}
-                />
-              </>
-            ) : null}
-            {typeof alert.yamnet_score === 'number' ? (
-              <>
-                <View style={styles.divider} />
-                <DetailRow
-                  icon="stats-chart-outline"
-                  label="Stored YAMNet score"
-                  value={formatConfidence(alert.yamnet_score)}
-                />
-              </>
-            ) : null}
-            <View style={styles.divider} />
-            <DetailRow
-              icon="pricetags-outline"
-              label="Stored categories"
-              value={
-                alert.categories?.length
-                  ? alert.categories.map(humanizeStatus).join(', ')
-                  : 'No categories were stored.'
-              }
-            />
-            {alert.tone?.trim() || alert.emotion?.trim() ? (
-              <>
-                <View style={styles.divider} />
-                <DetailRow
-                  icon="pulse-outline"
-                  label="Stored tone or acoustic indicator"
-                  value={alert.tone?.trim() || alert.emotion?.trim() || ''}
-                />
-              </>
-            ) : null}
-          </View>
+          <Text style={styles.small}>{HUMAN_REVIEW_WORDING}</Text>
 
-          <View style={styles.automaticNotice}>
-            <Ionicons
-              name="shield-checkmark-outline"
-              size={22}
-              color={COLORS.textSecondary}
-              importantForAccessibility="no-hide-descendants"
-            />
-            <Text style={styles.automaticNoticeText}>
-              {HUMAN_REVIEW_WORDING} {EVIDENCE_REVIEW_NOTE}
-            </Text>
-          </View>
-
-          {canViewTechnicalDetails(user?.role) ? (
+          {canViewTechnicalDetails(user) ? (
             <TechnicalDetails
               alert={alert}
               expanded={technicalExpanded}
@@ -407,80 +348,69 @@ export default function AlertDetailScreen() {
 }
 
 function SeverityEvidenceSection({ alert }: { alert: Alert }) {
+  const styles = useStyles();
   const evidence = alert.severity_evidence;
   const categories = Object.entries(evidence?.term_categories ?? {});
   const supportingEvidence = evidence?.supporting_evidence ?? [];
 
   return (
-    <View style={styles.card}>
-      <Text accessibilityRole="header" style={styles.sectionTitle}>
-        Why this alert was prioritized
+    <View style={styles.section}>
+      <SectionTitle>Why it was flagged</SectionTitle>
+      <Text style={styles.muted}>
+        Severity helps you decide what to review first. It doesn’t confirm
+        aggression or intent.
       </Text>
-      <Text style={styles.evidenceContext}>
-        Severity helps staff prioritize review. It does not verify aggression
-        or determine intent.
-      </Text>
-      {evidence ? (
-        <Text style={styles.recordedEvidenceLevel}>
-          Recorded evidence level: {evidence.level}
-        </Text>
-      ) : null}
-      {evidence && alert.severity_evidence_state === 'available' ? (
-        <View style={styles.evidenceBody}>
-          {evidence.reasons.length > 0 ? (
-            <EvidenceList
-              title="Primary reasons"
-              values={evidence.reasons.map(severityReasonLabel)}
-            />
-          ) : null}
-          {categories.length > 0 ? (
-            <View style={styles.evidenceGroup}>
-              <Text style={styles.evidenceHeading}>
-                Matched evidence categories
-              </Text>
-              {categories.map(([category, terms]) => (
-                <View key={category} style={styles.categoryCard}>
-                  <Text style={styles.categoryTitle}>
-                    {termCategoryEvidenceLabel(category)}
-                  </Text>
-                  {terms.map((term, index) => (
-                    <Text
-                      key={`${category}-${index}`}
-                      selectable
-                      style={styles.evidenceValue}
-                    >
-                      Matched phrase: “{term}”
+      <Card>
+        {evidence && alert.severity_evidence_state === 'available' ? (
+          <View style={styles.evidenceBody}>
+            {evidence.reasons.length > 0 ? (
+              <EvidenceList
+                title="Main reasons"
+                values={evidence.reasons.map(severityReasonLabel)}
+              />
+            ) : null}
+            {categories.length > 0 ? (
+              <View style={styles.evidenceGroup}>
+                <Text style={styles.evidenceHeading}>Matched word groups</Text>
+                {categories.map(([category, terms]) => (
+                  <View key={category} style={styles.categoryRow}>
+                    <Text style={styles.categoryTitle}>
+                      {termCategoryEvidenceLabel(category)}
                     </Text>
-                  ))}
-                </View>
-              ))}
-            </View>
-          ) : null}
-          {supportingEvidence.length > 0 ? (
-            <EvidenceList
-              title="Supporting acoustic or context evidence"
-              values={supportingEvidence.map(supportingEvidenceLabel)}
-            />
-          ) : null}
-        </View>
-      ) : (
-        <View style={styles.evidenceUnavailable}>
-          <Text style={styles.evidenceUnavailableText}>
+                    <View style={styles.chips}>
+                      {terms.map((term, index) => (
+                        <Text
+                          key={`${category}-${index}`}
+                          selectable
+                          style={styles.chip}
+                        >
+                          “{term}”
+                        </Text>
+                      ))}
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+            {supportingEvidence.length > 0 ? (
+              <EvidenceList
+                title="Supporting sound or context"
+                values={supportingEvidence.map(supportingEvidenceLabel)}
+              />
+            ) : null}
+          </View>
+        ) : (
+          <Text style={styles.muted}>
             {getSeverityEvidenceUnavailableMessage(alert)}
           </Text>
-        </View>
-      )}
+        )}
+      </Card>
     </View>
   );
 }
 
-function EvidenceList({
-  title,
-  values,
-}: {
-  title: string;
-  values: string[];
-}) {
+function EvidenceList({ title, values }: { title: string; values: string[] }) {
+  const styles = useStyles();
   return (
     <View style={styles.evidenceGroup}>
       <Text style={styles.evidenceHeading}>{title}</Text>
@@ -494,31 +424,6 @@ function EvidenceList({
   );
 }
 
-function DetailRow({
-  icon,
-  label,
-  value,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  label: string;
-  value: string;
-}) {
-  return (
-    <View style={styles.detailRow}>
-      <Ionicons
-        name={icon}
-        size={20}
-        color={COLORS.textSecondary}
-        importantForAccessibility="no-hide-descendants"
-      />
-      <View style={styles.detailCopy}>
-        <Text style={styles.detailLabel}>{label}</Text>
-        <Text style={styles.detailValue}>{value}</Text>
-      </View>
-    </View>
-  );
-}
-
 function TechnicalDetails({
   alert,
   expanded,
@@ -528,12 +433,11 @@ function TechnicalDetails({
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const palette = useTheme();
+  const styles = useStyles();
   const technicalRows = [
     ['Detection confidence', formatConfidence(alert.confidence)],
-    [
-      'YAMNet class',
-      alert.yamnet_class?.trim() || 'Not available',
-    ],
+    ['YAMNet class', alert.yamnet_class?.trim() || 'Not available'],
     [
       'YAMNet score',
       typeof alert.yamnet_score === 'number'
@@ -547,14 +451,14 @@ function TechnicalDetails({
     [
       'Duration',
       typeof alert.duration === 'number' && alert.duration > 0
-        ? `${alert.duration} seconds`
+        ? `${alert.duration.toFixed(1)} seconds`
         : 'Not available',
     ],
   ];
 
   return (
-    <View style={styles.technicalCard}>
-      <TouchableOpacity
+    <Card style={styles.technicalCard}>
+      <Pressable
         accessibilityRole="button"
         accessibilityLabel="Technical details"
         accessibilityHint={expanded ? 'Collapses technical details' : 'Expands technical details'}
@@ -562,27 +466,19 @@ function TechnicalDetails({
         style={styles.technicalButton}
         onPress={onToggle}
       >
-        <View style={styles.technicalHeading}>
-          <Ionicons
-            name="construct-outline"
-            size={21}
-            color={COLORS.textSecondary}
-            importantForAccessibility="no-hide-descendants"
-          />
-          <Text style={styles.technicalTitle}>Technical details</Text>
-        </View>
+        <Text style={styles.technicalTitle}>Technical details</Text>
         <Ionicons
           name={expanded ? 'chevron-up' : 'chevron-down'}
-          size={21}
-          color={COLORS.textSecondary}
+          size={20}
+          color={palette.textMuted}
           importantForAccessibility="no-hide-descendants"
         />
-      </TouchableOpacity>
+      </Pressable>
       {expanded ? (
         <View style={styles.technicalBody}>
           {technicalRows.map(([label, value], index) => (
             <View key={label}>
-              {index > 0 ? <View style={styles.divider} /> : null}
+              {index > 0 ? <Divider /> : null}
               <View style={styles.technicalRow}>
                 <Text style={styles.technicalLabel}>{label}</Text>
                 <Text style={styles.technicalValue}>{value}</Text>
@@ -591,7 +487,7 @@ function TechnicalDetails({
           ))}
         </View>
       ) : null}
-    </View>
+    </Card>
   );
 }
 
@@ -601,295 +497,217 @@ function formatMetric(value: number | null | undefined): string {
     : 'Not available';
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((palette) => ({
   safe: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: palette.background,
+  },
+  flex: {
+    flex: 1,
   },
   topBar: {
-    minHeight: 56,
+    minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: SPACING.sm,
+    paddingHorizontal: SPACE.sm,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-    backgroundColor: COLORS.surface,
+    borderBottomColor: palette.line,
   },
   backButton: {
-    width: 44,
-    height: 44,
+    minHeight: 44,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 22,
+    gap: SPACE.xs,
+    paddingHorizontal: SPACE.sm,
   },
-  topBarTitle: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.body,
-    fontWeight: '700',
-  },
-  topBarSpacer: {
-    width: 44,
+  backText: {
+    color: palette.text,
+    fontFamily: FONTS.medium,
+    ...TYPE.body,
   },
   state: {
     width: '100%',
     maxWidth: 760,
     alignSelf: 'center',
-    padding: SPACING.lg,
-  },
-  scroll: {
-    flex: 1,
+    padding: SPACE.lg,
   },
   content: {
     width: '100%',
     maxWidth: 760,
     alignSelf: 'center',
-    padding: SPACING.lg,
-    paddingBottom: SPACING.xxxl,
-    gap: SPACING.lg,
+    padding: SPACE.lg,
+    paddingBottom: SPACE.xxl,
+    gap: SPACE.xl,
   },
   testBanner: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: SPACING.md,
-    padding: SPACING.lg,
-    borderWidth: 1,
-    borderColor: COLORS.primarySoft,
-    borderRadius: RADII.md,
-    backgroundColor: COLORS.informationBackground,
+    gap: SPACE.xs,
+    padding: SPACE.md,
+    borderWidth: 2,
+    borderColor: palette.text,
+    borderRadius: RADIUS.panel,
   },
-  testBannerCopy: {
-    flex: 1,
-    gap: SPACING.xs,
+  testTitle: {
+    color: palette.text,
+    fontFamily: FONTS.semibold,
+    ...TYPE.bodyLarge,
   },
-  testBannerTitle: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.body,
-    fontWeight: '800',
-  },
-  testBannerText: {
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.secondary,
-    lineHeight: 21,
+  testText: {
+    color: palette.textMuted,
+    fontFamily: FONTS.regular,
+    ...TYPE.body,
   },
   hero: {
-    gap: SPACING.md,
-    paddingVertical: SPACING.sm,
+    gap: SPACE.sm,
+    paddingBottom: SPACE.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: palette.line,
+  },
+  tagRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACE.md,
+  },
+  reviewState: {
+    color: palette.textMuted,
+    fontFamily: FONTS.medium,
+    ...TYPE.small,
   },
   title: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.screenTitle,
-    fontWeight: '800',
-    letterSpacing: -0.5,
-    lineHeight: 34,
+    color: palette.text,
+    fontFamily: FONTS.semibold,
+    ...TYPE.display,
+    marginTop: SPACE.xs,
   },
-  explanation: {
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.body,
-    lineHeight: 24,
+  school: {
+    color: palette.text,
+    fontFamily: FONTS.medium,
+    ...TYPE.body,
   },
-  requiredNotice: {
-    color: COLORS.danger,
-    fontSize: TYPOGRAPHY.body,
-    fontWeight: '700',
-    lineHeight: 24,
+  time: {
+    color: palette.textMuted,
+    fontFamily: FONTS.regular,
+    ...TYPE.bodyLarge,
+    fontVariant: ['tabular-nums'],
   },
-  card: {
-    backgroundColor: COLORS.surface,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: RADII.lg,
-    padding: SPACING.lg,
-    gap: SPACING.md,
+  actions: {
+    gap: SPACE.sm,
+    marginTop: SPACE.sm,
   },
-  sectionTitle: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.cardTitle,
-    fontWeight: '700',
-    lineHeight: 24,
+  section: {
+    gap: SPACE.sm,
   },
-  detailRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: SPACING.md,
-    paddingVertical: SPACING.xs,
+  muted: {
+    color: palette.textMuted,
+    fontFamily: FONTS.regular,
+    ...TYPE.body,
   },
-  detailCopy: {
-    flex: 1,
-    gap: 2,
+  small: {
+    color: palette.textMuted,
+    fontFamily: FONTS.regular,
+    ...TYPE.small,
   },
-  detailLabel: {
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.caption,
-    lineHeight: 19,
-  },
-  detailValue: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.body,
-    fontWeight: '600',
-    lineHeight: 23,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: COLORS.border,
-  },
-  phrase: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.body,
-    lineHeight: 24,
+  transcript: {
+    color: palette.text,
+    fontFamily: FONTS.regular,
+    ...TYPE.bodyLarge,
   },
   unavailable: {
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.body,
-    lineHeight: 24,
-    fontStyle: 'italic',
-  },
-  transcriptionNotice: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: SPACING.sm,
-    padding: SPACING.md,
-    borderRadius: RADII.md,
-    backgroundColor: COLORS.informationBackground,
-  },
-  noticeText: {
-    flex: 1,
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.caption,
-    lineHeight: 19,
-  },
-  automaticNotice: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: SPACING.md,
-    padding: SPACING.lg,
-    borderRadius: RADII.md,
-    backgroundColor: COLORS.surfaceSecondary,
-  },
-  automaticNoticeText: {
-    flex: 1,
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.secondary,
-    lineHeight: 21,
-  },
-  evidenceContext: {
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.secondary,
-    lineHeight: 21,
-  },
-  recordedEvidenceLevel: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.secondary,
-    fontWeight: '700',
-    lineHeight: 21,
+    color: palette.textMuted,
+    fontFamily: FONTS.regular,
+    ...TYPE.body,
   },
   evidenceBody: {
-    gap: SPACING.lg,
-    padding: SPACING.md,
-    borderRadius: RADII.md,
-    backgroundColor: COLORS.surfaceSecondary,
+    gap: SPACE.lg,
   },
   evidenceGroup: {
-    gap: SPACING.sm,
+    gap: SPACE.sm,
   },
   evidenceHeading: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.secondary,
-    fontWeight: '800',
-    lineHeight: 20,
+    color: palette.text,
+    fontFamily: FONTS.semibold,
+    ...TYPE.body,
   },
   bulletRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: SPACING.sm,
+    gap: SPACE.sm,
   },
   bullet: {
-    width: 6,
-    height: 6,
-    marginTop: 8,
+    width: 5,
+    height: 5,
+    marginTop: 9,
     borderRadius: 3,
-    backgroundColor: COLORS.primary,
+    backgroundColor: palette.textMuted,
   },
   evidenceValue: {
     flex: 1,
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.secondary,
-    lineHeight: 21,
+    color: palette.text,
+    fontFamily: FONTS.regular,
+    ...TYPE.body,
   },
-  categoryCard: {
-    gap: SPACING.xs,
-    padding: SPACING.md,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: RADII.sm,
-    backgroundColor: COLORS.surface,
+  categoryRow: {
+    gap: SPACE.xs,
   },
   categoryTitle: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.secondary,
-    fontWeight: '700',
-    lineHeight: 20,
+    color: palette.textMuted,
+    fontFamily: FONTS.medium,
+    ...TYPE.small,
   },
-  evidenceUnavailable: {
-    padding: SPACING.md,
-    borderRadius: RADII.md,
-    backgroundColor: COLORS.warningBackground,
+  chips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: SPACE.xs,
   },
-  evidenceUnavailableText: {
-    color: COLORS.warning,
-    fontSize: TYPOGRAPHY.secondary,
-    lineHeight: 21,
+  chip: {
+    color: palette.text,
+    fontFamily: FONTS.regular,
+    ...TYPE.small,
+    paddingHorizontal: SPACE.sm,
+    paddingVertical: 2,
+    borderRadius: RADIUS.tag,
+    borderWidth: 1,
+    borderColor: palette.line,
+    backgroundColor: palette.surfaceMuted,
+    overflow: 'hidden',
   },
   technicalCard: {
-    overflow: 'hidden',
-    backgroundColor: COLORS.surface,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: RADII.lg,
+    padding: 0,
+    gap: 0,
   },
   technicalButton: {
     minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: SPACING.md,
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.md,
-  },
-  technicalHeading: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: SPACING.sm,
-    flex: 1,
+    paddingHorizontal: SPACE.lg,
   },
   technicalTitle: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.body,
-    fontWeight: '700',
+    color: palette.text,
+    fontFamily: FONTS.semibold,
+    ...TYPE.body,
   },
   technicalBody: {
-    paddingHorizontal: SPACING.lg,
-    paddingBottom: SPACING.lg,
+    paddingHorizontal: SPACE.lg,
+    paddingBottom: SPACE.md,
   },
   technicalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: SPACING.lg,
-    paddingVertical: SPACING.md,
+    gap: SPACE.lg,
+    paddingVertical: SPACE.sm,
   },
   technicalLabel: {
     flex: 1,
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.secondary,
-    lineHeight: 20,
+    color: palette.textMuted,
+    fontFamily: FONTS.regular,
+    ...TYPE.small,
   },
   technicalValue: {
     flex: 1,
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.secondary,
-    fontWeight: '600',
-    lineHeight: 20,
+    color: palette.text,
+    fontFamily: FONTS.medium,
+    ...TYPE.small,
     textAlign: 'right',
+    fontVariant: ['tabular-nums'],
   },
-});
+}));

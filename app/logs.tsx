@@ -1,3 +1,3 @@
 // Compatibility route for existing links and notification navigation.
-// The teacher-friendly route is now /history.
+// History is now the "All" tab on Alerts.
 export { default } from './history';

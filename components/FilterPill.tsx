@@ -1,6 +1,7 @@
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity } from 'react-native';
-import { COLORS, RADII, SPACING, TYPOGRAPHY } from '../lib/constants';
+import { Pressable, Text } from 'react-native';
+import { FONTS, RADIUS, SPACE, TYPE } from '../lib/theme';
+import { makeStyles } from '../lib/useTheme';
 
 interface Props {
   label: string;
@@ -9,44 +10,43 @@ interface Props {
 }
 
 export default function FilterPill({ label, selected, onPress }: Props) {
+  const styles = useStyles();
   return (
-    <TouchableOpacity
+    <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${label} filter`}
       accessibilityState={{ selected }}
       style={[styles.pill, selected && styles.selectedPill]}
       onPress={onPress}
-      activeOpacity={0.75}
     >
       <Text style={[styles.label, selected && styles.selectedLabel]}>
         {label}
       </Text>
-    </TouchableOpacity>
+    </Pressable>
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((palette) => ({
   pill: {
-    minHeight: 44,
+    minHeight: 40,
     justifyContent: 'center',
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.sm,
-    borderRadius: RADII.pill,
+    paddingHorizontal: SPACE.md,
+    borderRadius: RADIUS.control,
     borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.surface,
+    borderColor: palette.line,
+    backgroundColor: palette.surface,
   },
   selectedPill: {
-    borderColor: COLORS.primary,
-    backgroundColor: COLORS.informationBackground,
+    borderColor: palette.text,
+    backgroundColor: palette.surfaceMuted,
   },
   label: {
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.secondary,
-    fontWeight: '600',
+    color: palette.textMuted,
+    fontFamily: FONTS.medium,
+    ...TYPE.small,
   },
   selectedLabel: {
-    color: COLORS.primaryPressed,
-    fontWeight: '700',
+    color: palette.text,
+    fontFamily: FONTS.semibold,
   },
-});
+}));

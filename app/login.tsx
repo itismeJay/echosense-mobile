@@ -1,35 +1,45 @@
-import React, {
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-} from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
-  StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Redirect } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { COLORS, RADII, SPACING, TYPOGRAPHY } from '../lib/constants';
-import { login, wakeup } from '../lib/auth';
+import { clearPushToken, getErrorDetail, getHttpStatus } from '../lib/api';
+import {
+  clearLocalPushRegistration,
+  getToken,
+  login,
+  logout,
+  wakeup,
+} from '../lib/auth';
+import { SERVER_SWITCHING_ENABLED } from '../lib/constants';
+import { checkServerHealth, getServerUrl, saveServer } from '../lib/server';
+import {
+  LIVE_SERVER_URL,
+  describeServer,
+  isLiveServer,
+  switchServer,
+} from '../lib/serverConfig';
+import { SCHOOL_INACTIVE_MESSAGE, classifyAuthFailure } from '../lib/session';
+import { FONTS, RADIUS, SPACE, TYPE } from '../lib/theme';
+import { makeStyles } from '../lib/useTheme';
+import { Button, Notice, TextField } from '../components/ui';
 import { AuthContext } from './_layout';
 
 export default function LoginScreen() {
-  const { isAuthenticated, onSignIn } = useContext(AuthContext);
+  const { isAuthenticated, onSignIn, signOutReason } = useContext(AuthContext);
+  const styles = useStyles();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [slowHint, setSlowHint] = useState(false);
   const [error, setError] = useState('');
+  const [serverUrl, setServerUrl] = useState(getServerUrl());
   const passwordInput = useRef<TextInput>(null);
   const slowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -38,7 +48,7 @@ export default function LoginScreen() {
     return () => {
       if (slowTimer.current) clearTimeout(slowTimer.current);
     };
-  }, []);
+  }, [serverUrl]);
 
   async function handleLogin() {
     if (!email.trim() || !password) {
@@ -53,22 +63,17 @@ export default function LoginScreen() {
 
     try {
       const signedInUser = await login(email.trim(), password);
+      setPassword('');
       onSignIn(signedInUser);
     } catch (caught: unknown) {
-      const status =
-        typeof caught === 'object' &&
-        caught !== null &&
-        'response' in caught &&
-        typeof caught.response === 'object' &&
-        caught.response !== null &&
-        'status' in caught.response
-          ? caught.response.status
-          : null;
-
+      const status = getHttpStatus(caught);
+      const failure = classifyAuthFailure(status, getErrorDetail(caught));
       setError(
-        status === 401
-          ? 'The email or password wasn’t recognized.'
-          : 'We couldn’t connect to EchoSense. Check your connection and try again.'
+        failure === 'school-inactive'
+          ? SCHOOL_INACTIVE_MESSAGE
+          : status === 401
+            ? 'The email or password wasn’t recognized.'
+            : `We couldn’t connect to ${describeServer(serverUrl)}. Check your connection and try again.`
       );
     } finally {
       if (slowTimer.current) {
@@ -81,13 +86,15 @@ export default function LoginScreen() {
   }
 
   if (isAuthenticated) {
-    return <Redirect href="/" />;
+    // The root layout routes a signed-in user: the forced password change,
+    // a pending notification, or Alerts. A second redirect here would race it.
+    return null;
   }
 
   return (
     <SafeAreaView style={styles.safe}>
       <KeyboardAvoidingView
-        style={styles.container}
+        style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <ScrollView
@@ -95,111 +102,76 @@ export default function LoginScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <View style={styles.header}>
-            <View style={styles.logoMark}>
-              <Ionicons
-                name="school-outline"
-                size={30}
-                color={COLORS.primary}
-                importantForAccessibility="no-hide-descendants"
-              />
-            </View>
-            <Text accessibilityRole="header" style={styles.logo}>
-              EchoSense
-            </Text>
-            <Text style={styles.subtitle}>
-              Classroom alerts, presented clearly for school staff.
-            </Text>
-          </View>
-
-          <View style={styles.formCard}>
-            <Text accessibilityRole="header" style={styles.formTitle}>
-              Sign in
-            </Text>
-
-            <View style={styles.field}>
-              <Text style={styles.label}>Email address</Text>
-              <TextInput
-                style={styles.input}
-                accessibilityLabel="Email address"
-                placeholder="name@school.edu"
-                placeholderTextColor={COLORS.textMuted}
-                value={email}
-                onChangeText={setEmail}
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="email-address"
-                autoComplete="email"
-                returnKeyType="next"
-                onSubmitEditing={() => passwordInput.current?.focus()}
-              />
+          <View style={styles.column}>
+            <View style={styles.brandRow}>
+              <View style={styles.brandMark} />
+              <Text style={styles.brand}>EchoSense</Text>
             </View>
 
-            <View style={styles.field}>
-              <Text style={styles.label}>Password</Text>
-              <View style={styles.passwordRow}>
-                <TextInput
-                  ref={passwordInput}
-                  style={[styles.input, styles.passwordInput]}
-                  accessibilityLabel="Password"
-                  placeholder="Enter your password"
-                  placeholderTextColor={COLORS.textMuted}
-                  value={password}
-                  onChangeText={setPassword}
-                  secureTextEntry={!showPassword}
-                  autoComplete="password"
-                  returnKeyType="done"
-                  onSubmitEditing={handleLogin}
-                />
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  accessibilityLabel={
-                    showPassword ? 'Hide password' : 'Show password'
-                  }
-                  style={styles.eyeButton}
-                  onPress={() => setShowPassword((value) => !value)}
-                >
-                  <Ionicons
-                    name={showPassword ? 'eye-off-outline' : 'eye-outline'}
-                    size={22}
-                    color={COLORS.textSecondary}
-                    importantForAccessibility="no-hide-descendants"
-                  />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {error ? (
-              <Text
-                accessibilityRole="alert"
-                accessibilityLiveRegion="assertive"
-                style={styles.error}
-              >
-                {error}
+            <View style={styles.heading}>
+              <Text accessibilityRole="header" style={styles.title}>
+                Sign in
               </Text>
+              <Text style={styles.subtitle}>
+                Use the account your school administrator gave you.
+              </Text>
+            </View>
+
+            {signOutReason === 'school_inactive' && !error ? (
+              <Notice tone="danger">{SCHOOL_INACTIVE_MESSAGE}</Notice>
             ) : null}
+
+            <TextField
+              label="Email address"
+              placeholder="name@school.edu"
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+              autoComplete="email"
+              textContentType="username"
+              returnKeyType="next"
+              onSubmitEditing={() => passwordInput.current?.focus()}
+            />
+            <TextField
+              ref={passwordInput}
+              label="Password"
+              secure
+              value={password}
+              onChangeText={setPassword}
+              autoComplete="password"
+              textContentType="password"
+              returnKeyType="go"
+              onSubmitEditing={handleLogin}
+            />
+
+            {error ? <Notice tone="danger">{error}</Notice> : null}
             {slowHint && !error ? (
               <Text accessibilityLiveRegion="polite" style={styles.hint}>
-                EchoSense is taking a little longer to respond. Please keep this
-                screen open.
+                {isLiveServer(serverUrl)
+                  ? 'The live server can take up to a minute to wake up. Please keep this screen open.'
+                  : 'EchoSense is taking a little longer to respond. Please keep this screen open.'}
               </Text>
             ) : null}
 
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel={loading ? 'Signing in' : 'Sign in'}
-              accessibilityState={{ disabled: loading, busy: loading }}
-              style={[styles.button, loading && styles.buttonLoading]}
+            <Button
+              label={loading ? 'Signing in…' : 'Sign in'}
+              variant="primary"
+              pending={loading}
               onPress={handleLogin}
-              disabled={loading}
-              activeOpacity={0.75}
-            >
-              {loading ? (
-                <ActivityIndicator color={COLORS.white} size="small" />
-              ) : (
-                <Text style={styles.buttonText}>Sign in</Text>
-              )}
-            </TouchableOpacity>
+            />
+
+            {SERVER_SWITCHING_ENABLED ? (
+              <ServerOption
+                serverUrl={serverUrl}
+                disabled={loading}
+                onChanged={(url) => {
+                  setServerUrl(url);
+                  setError('');
+                }}
+              />
+            ) : null}
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -207,122 +179,235 @@ export default function LoginScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function ServerOption({
+  serverUrl,
+  disabled,
+  onChanged,
+}: {
+  serverUrl: string;
+  disabled: boolean;
+  onChanged: (url: string) => void;
+}) {
+  const styles = useStyles();
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<'live' | 'local'>(
+    isLiveServer(serverUrl) ? 'live' : 'local'
+  );
+  const [address, setAddress] = useState(
+    isLiveServer(serverUrl) ? '' : serverUrl
+  );
+  const [checking, setChecking] = useState(false);
+  const [message, setMessage] = useState<{ tone: 'neutral' | 'danger'; text: string } | null>(null);
+
+  async function save() {
+    setChecking(true);
+    setMessage(null);
+    const result = await switchServer(mode === 'live' ? LIVE_SERVER_URL : address, {
+      currentUrl: getServerUrl(),
+      checkHealth: checkServerHealth,
+      hasSession: async () => Boolean(await getToken()),
+      detachPushToken: clearPushToken,
+      clearLocalPushRegistration,
+      signOut: () => logout('signed_out'),
+      saveServer,
+    });
+    setChecking(false);
+
+    switch (result.status) {
+      case 'invalid':
+        setMessage({ tone: 'danger', text: result.error });
+        break;
+      case 'unreachable':
+        setMessage({
+          tone: 'danger',
+          text: 'That server didn’t answer. Check the address, that the server is running, and that this phone is on the same Wi-Fi.',
+        });
+        break;
+      case 'unchanged':
+        setOpen(false);
+        break;
+      case 'switched':
+        onChanged(result.url);
+        setMessage({ tone: 'neutral', text: `Connected to ${describeServer(result.url)}.` });
+        setOpen(false);
+        break;
+    }
+  }
+
+  return (
+    <View style={styles.server}>
+      <View style={styles.serverRow}>
+        <Text style={styles.serverText} accessibilityLabel={`Server: ${describeServer(serverUrl)}`}>
+          Server: {describeServer(serverUrl)}
+        </Text>
+        <Button
+          label={open ? 'Cancel' : 'Change'}
+          variant="quiet"
+          disabled={disabled || checking}
+          accessibilityLabel={open ? 'Cancel server change' : 'Change server'}
+          onPress={() => {
+            setOpen((value) => !value);
+            setMessage(null);
+          }}
+        />
+      </View>
+
+      {open ? (
+        <View style={styles.serverPanel}>
+          {(['live', 'local'] as const).map((option) => {
+            const selected = mode === option;
+            return (
+              <Pressable
+                key={option}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: selected }}
+                onPress={() => setMode(option)}
+                style={styles.radioRow}
+              >
+                <View style={[styles.radio, selected && styles.radioSelected]}>
+                  {selected ? <View style={styles.radioDot} /> : null}
+                </View>
+                <Text style={styles.radioLabel}>
+                  {option === 'live' ? 'Live (Render)' : 'Local address'}
+                </Text>
+              </Pressable>
+            );
+          })}
+          {mode === 'local' ? (
+            <TextField
+              label="Local server address"
+              placeholder="http://192.168.1.20:8000"
+              value={address}
+              onChangeText={setAddress}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              hint="The computer running the EchoSense backend, on the same Wi-Fi."
+            />
+          ) : null}
+          <Button
+            label={checking ? 'Checking…' : 'Check and save'}
+            variant="secondary"
+            pending={checking}
+            onPress={save}
+          />
+        </View>
+      ) : null}
+
+      {message ? <Notice tone={message.tone}>{message.text}</Notice> : null}
+    </View>
+  );
+}
+
+const useStyles = makeStyles((palette) => ({
   safe: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: palette.background,
   },
-  container: {
+  flex: {
     flex: 1,
   },
   scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
-    paddingHorizontal: SPACING.xl,
-    paddingVertical: SPACING.xxxl,
+    paddingHorizontal: SPACE.lg,
+    paddingVertical: SPACE.xxl,
   },
-  header: {
+  column: {
+    width: '100%',
+    maxWidth: 400,
+    alignSelf: 'center',
+    gap: SPACE.lg,
+  },
+  brandRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: SPACING.xxl,
+    gap: SPACE.sm,
   },
-  logoMark: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: COLORS.informationBackground,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: SPACING.md,
+  brandMark: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: palette.brand,
   },
-  logo: {
-    fontSize: 30,
-    fontWeight: '800',
-    color: COLORS.text,
-    letterSpacing: -0.6,
+  brand: {
+    color: palette.text,
+    fontFamily: FONTS.semibold,
+    ...TYPE.bodyLarge,
+  },
+  heading: {
+    gap: SPACE.xs,
+    marginTop: SPACE.lg,
+  },
+  title: {
+    color: palette.text,
+    fontFamily: FONTS.semibold,
+    ...TYPE.display,
   },
   subtitle: {
-    maxWidth: 320,
-    marginTop: SPACING.sm,
-    fontSize: TYPOGRAPHY.secondary,
-    lineHeight: 21,
-    color: COLORS.textSecondary,
-    textAlign: 'center',
-  },
-  formCard: {
-    width: '100%',
-    maxWidth: 480,
-    alignSelf: 'center',
-    gap: SPACING.lg,
-    padding: SPACING.xl,
-    backgroundColor: COLORS.surface,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: RADII.lg,
-  },
-  formTitle: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.sectionTitle,
-    fontWeight: '700',
-  },
-  field: {
-    gap: SPACING.sm,
-  },
-  label: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.secondary,
-    fontWeight: '600',
-  },
-  input: {
-    minHeight: 52,
-    backgroundColor: COLORS.surface,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: RADII.md,
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.md,
-    fontSize: TYPOGRAPHY.body,
-    color: COLORS.text,
-  },
-  passwordRow: {
-    position: 'relative',
-  },
-  passwordInput: {
-    paddingRight: 56,
-  },
-  eyeButton: {
-    position: 'absolute',
-    right: 4,
-    top: 4,
-    width: 44,
-    height: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  error: {
-    fontSize: TYPOGRAPHY.secondary,
-    color: COLORS.danger,
-    lineHeight: 21,
+    color: palette.textMuted,
+    fontFamily: FONTS.regular,
+    ...TYPE.body,
   },
   hint: {
-    fontSize: TYPOGRAPHY.caption,
-    color: COLORS.textSecondary,
-    lineHeight: 19,
+    color: palette.textMuted,
+    fontFamily: FONTS.regular,
+    ...TYPE.small,
   },
-  button: {
-    minHeight: 52,
-    backgroundColor: COLORS.primary,
-    borderRadius: RADII.md,
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.md,
+  server: {
+    gap: SPACE.sm,
+    marginTop: SPACE.lg,
+    paddingTop: SPACE.md,
+    borderTopWidth: 1,
+    borderTopColor: palette.line,
+  },
+  serverRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: SPACE.sm,
+  },
+  serverText: {
+    flex: 1,
+    color: palette.textMuted,
+    fontFamily: FONTS.regular,
+    ...TYPE.small,
+  },
+  serverPanel: {
+    gap: SPACE.md,
+    padding: SPACE.md,
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: RADIUS.panel,
+    backgroundColor: palette.surfaceMuted,
+  },
+  radioRow: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACE.md,
+  },
+  radio: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: palette.lineStrong,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  buttonLoading: {
-    opacity: 0.7,
+  radioSelected: {
+    borderColor: palette.text,
   },
-  buttonText: {
-    color: COLORS.white,
-    fontSize: TYPOGRAPHY.body,
-    fontWeight: '700',
+  radioDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: palette.text,
   },
-});
+  radioLabel: {
+    color: palette.text,
+    fontFamily: FONTS.medium,
+    ...TYPE.body,
+  },
+}));

@@ -1,241 +1,181 @@
-import React, {
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react';
-import {
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  useWindowDimensions,
-  View,
-} from 'react-native';
+import { router, useFocusEffect } from 'expo-router';
+import React, { useCallback, useContext, useState } from 'react';
+import { RefreshControl, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
-import { BarChart } from 'react-native-chart-kit';
-import { Ionicons } from '@expo/vector-icons';
+import { canViewReports } from '../lib/access';
 import { fetchStats } from '../lib/api';
-import {
-  COLORS,
-  RADII,
-  SPACING,
-  TYPOGRAPHY,
-} from '../lib/constants';
-import { canViewReports } from '../lib/presentation';
-import type { LogStats } from '../lib/types';
+import { FONTS, RADIUS, SPACE, TYPE, severityColors } from '../lib/theme';
+import type { LogStats, Severity } from '../lib/types';
+import { makeStyles, useTheme } from '../lib/useTheme';
 import LoadingScreen from '../components/LoadingScreen';
 import ScreenState from '../components/ScreenState';
 import StatCard from '../components/StatCard';
+import { Button, Card, Notice, ScreenHeader, SectionTitle } from '../components/ui';
 import { AuthContext } from './_layout';
+
+const SEVERITY_ROWS: { key: Severity; label: string; field: keyof LogStats }[] = [
+  { key: 'high', label: 'High', field: 'high_severity' },
+  { key: 'medium', label: 'Medium', field: 'medium_severity' },
+  { key: 'low', label: 'Low', field: 'low_severity' },
+];
 
 export default function ReportsScreen() {
   const { user } = useContext(AuthContext);
-  const { width } = useWindowDimensions();
+  const palette = useTheme();
+  const styles = useStyles();
   const [stats, setStats] = useState<LogStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(false);
+  const allowed = canViewReports(user);
 
-  const load = useCallback(async (showRefresh = false) => {
-    if (showRefresh) setRefreshing(true);
-    try {
-      setStats(await fetchStats());
-      setError(false);
-    } catch {
-      setError(true);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
+  const load = useCallback(
+    async (showRefresh = false) => {
+      // Staff never request report data, even if this screen is opened directly.
+      if (!allowed) {
+        setLoading(false);
+        return;
+      }
+      if (showRefresh) setRefreshing(true);
+      try {
+        setStats(await fetchStats());
+        setError(false);
+      } catch {
+        setError(true);
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [allowed]
+  );
 
-  useEffect(() => {
-    if (canViewReports(user?.role)) load();
-    else setLoading(false);
-  }, [load, user?.role]);
-
-  const chartWidth = Math.max(240, Math.min(width - 56, 640));
-  const total = stats?.total_alerts ?? 0;
-  const chartData = useMemo(
-    () => ({
-      labels: ['High', 'Medium', 'Low'],
-      datasets: [
-        {
-          data: [
-            stats?.high_severity ?? 0,
-            stats?.medium_severity ?? 0,
-            stats?.low_severity ?? 0,
-          ],
-        },
-      ],
-    }),
-    [stats]
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load])
   );
 
   if (loading) {
-    return <LoadingScreen message="Loading alert reports…" />;
+    return <LoadingScreen message="Loading reports…" />;
   }
 
-  if (!canViewReports(user?.role)) {
+  if (!allowed) {
     return (
       <SafeAreaView style={styles.safe}>
-        <View style={styles.state}>
+        <View style={styles.denied}>
           <ScreenState
             icon="lock-closed-outline"
-            title="Reports aren’t available for this account."
-            message="Your classroom alerts and history are still available from the main navigation."
-            actionLabel="Go to home"
-            onAction={() => router.replace('/')}
+            title="Reports aren’t available for your account."
+            message="Your alerts are on the Alerts tab."
+            actionLabel="Go to alerts"
+            onAction={() => router.replace('/alerts')}
           />
         </View>
       </SafeAreaView>
     );
   }
 
+  const total = stats?.total_alerts ?? 0;
+  const max = Math.max(
+    1,
+    ...SEVERITY_ROWS.map((row) => Number(stats?.[row.field] ?? 0))
+  );
+
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <ScrollView
-        style={styles.screen}
+        style={styles.flex}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
             onRefresh={() => load(true)}
-            tintColor={COLORS.primary}
-            colors={[COLORS.primary]}
+            tintColor={palette.textMuted}
+            colors={[palette.link]}
           />
         }
       >
-        <View style={styles.header}>
-          <Text accessibilityRole="header" style={styles.title}>
-            Reports
-          </Text>
-          <Text style={styles.subtitle}>
-            A summary of the available alert history.
-          </Text>
-        </View>
+        <ScreenHeader
+          title="Reports"
+          subtitle={
+            user?.is_super_admin
+              ? 'A summary of alerts across every school.'
+              : 'A summary of your school’s alerts.'
+          }
+        />
 
         {error && !stats ? (
           <ScreenState
             icon="cloud-offline-outline"
-            title="We couldn’t load alert reports."
+            title="We couldn’t load reports."
             message="Check your connection and try again."
             actionLabel="Try again"
-            onAction={() => load()}
+            onAction={() => {
+              setLoading(true);
+              void load();
+            }}
             tone="error"
           />
         ) : (
           <>
             {error ? (
-              <View style={styles.inlineError} accessibilityRole="alert">
-                <Ionicons
-                  name="cloud-offline-outline"
-                  size={20}
-                  color={COLORS.danger}
-                  importantForAccessibility="no-hide-descendants"
-                />
-                <Text style={styles.inlineErrorText}>
+              <View style={styles.inlineError}>
+                <Notice tone="danger">
                   This summary may be out of date.
-                </Text>
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  accessibilityLabel="Try loading reports again"
-                  style={styles.retryButton}
-                  onPress={() => load()}
-                >
-                  <Text style={styles.retryText}>Try again</Text>
-                </TouchableOpacity>
+                </Notice>
               </View>
             ) : null}
 
-            <View style={styles.summaryGrid}>
-              <StatCard
-                label="All alerts"
-                value={total}
-                color={COLORS.primary}
-                icon="documents-outline"
-              />
-              <StatCard
-                label="High priority"
-                value={stats?.high_severity ?? 0}
-                color={COLORS.danger}
-                icon="alert-circle-outline"
-              />
-              <StatCard
-                label="Medium priority"
-                value={stats?.medium_severity ?? 0}
-                color={COLORS.warning}
-                icon="warning-outline"
-              />
-              <StatCard
-                label="Low priority"
-                value={stats?.low_severity ?? 0}
-                color={COLORS.information}
-                icon="information-circle-outline"
-              />
+            <View style={styles.statsRow}>
+              <StatCard label="All alerts" value={total} />
+              <StatCard label="High" value={stats?.high_severity ?? 0} />
             </View>
 
-            <View style={styles.chartCard}>
-              <Text accessibilityRole="header" style={styles.chartTitle}>
-                Alerts by priority
-              </Text>
-              <Text style={styles.chartDescription}>
-                Counts reflect the current history summary from EchoSense.
-              </Text>
-              {total > 0 ? (
-                <View
-                  accessible
-                  accessibilityRole="image"
-                  accessibilityLabel={`Alert counts by priority. High ${
-                    stats?.high_severity ?? 0
-                  }, medium ${stats?.medium_severity ?? 0}, low ${
-                    stats?.low_severity ?? 0
-                  }.`}
-                >
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.chartScroll}
-                    importantForAccessibility="no-hide-descendants"
-                  >
-                    <BarChart
-                      data={chartData}
-                      width={chartWidth}
-                      height={220}
-                      chartConfig={{
-                        backgroundColor: COLORS.surface,
-                        backgroundGradientFrom: COLORS.surface,
-                        backgroundGradientTo: COLORS.surface,
-                        decimalPlaces: 0,
-                        color: () => COLORS.primary,
-                        labelColor: () => COLORS.textSecondary,
-                        propsForBackgroundLines: {
-                          stroke: COLORS.border,
-                          strokeDasharray: '',
-                        },
-                      }}
-                      style={styles.chart}
-                      showValuesOnTopOfBars
-                      withInnerLines
-                      fromZero
-                      yAxisLabel=""
-                      yAxisSuffix=""
-                    />
-                  </ScrollView>
-                </View>
-              ) : (
-                <ScreenState
-                  icon="bar-chart-outline"
-                  title="No alert history is available yet."
-                  message="This report will update when alerts are available."
-                />
-              )}
+            <View style={styles.section}>
+              <SectionTitle>Alerts by severity</SectionTitle>
+              <Card>
+                {total > 0 ? (
+                  SEVERITY_ROWS.map((row) => {
+                    const value = Number(stats?.[row.field] ?? 0);
+                    const { color } = severityColors(palette, row.key);
+                    return (
+                      <View
+                        key={row.key}
+                        style={styles.barRow}
+                        accessible
+                        accessibilityLabel={`${row.label}: ${value} ${value === 1 ? 'alert' : 'alerts'}`}
+                      >
+                        <View style={styles.barHeader}>
+                          <Text style={[styles.barLabel, { color }]}>{row.label}</Text>
+                          <Text style={styles.barValue}>{value}</Text>
+                        </View>
+                        <View style={styles.track}>
+                          <View
+                            style={[
+                              styles.bar,
+                              {
+                                backgroundColor: color,
+                                width: `${Math.round((value / max) * 100)}%`,
+                              },
+                            ]}
+                          />
+                        </View>
+                      </View>
+                    );
+                  })
+                ) : (
+                  <Text style={styles.empty}>
+                    No alerts yet. This report fills in as alerts arrive.
+                  </Text>
+                )}
+              </Card>
             </View>
+
+            {error ? (
+              <Button label="Try again" onPress={() => load()} />
+            ) : null}
           </>
         )}
       </ScrollView>
@@ -243,100 +183,68 @@ export default function ReportsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((palette) => ({
   safe: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: palette.background,
   },
-  screen: {
+  flex: {
     flex: 1,
+  },
+  denied: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: SPACE.lg,
   },
   content: {
     width: '100%',
     maxWidth: 760,
     alignSelf: 'center',
-    padding: SPACING.lg,
-    paddingTop: SPACING.xl,
-    paddingBottom: SPACING.xxxl,
-    gap: SPACING.lg,
-  },
-  header: {
-    gap: SPACING.xs,
-  },
-  title: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.screenTitle,
-    fontWeight: '800',
-    letterSpacing: -0.5,
-  },
-  subtitle: {
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.secondary,
-    lineHeight: 21,
-  },
-  state: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: SPACING.lg,
+    padding: SPACE.lg,
+    paddingBottom: SPACE.xxl,
+    gap: SPACE.xl,
   },
   inlineError: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: SPACING.sm,
-    padding: SPACING.md,
-    borderRadius: RADII.md,
-    borderWidth: 1,
-    borderColor: COLORS.dangerBorder,
-    backgroundColor: COLORS.offlineBackground,
+    marginTop: -SPACE.sm,
   },
-  inlineErrorText: {
-    flex: 1,
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.secondary,
-  },
-  retryButton: {
-    minHeight: 44,
-    justifyContent: 'center',
-    paddingHorizontal: SPACING.sm,
-  },
-  retryText: {
-    color: COLORS.primary,
-    fontSize: TYPOGRAPHY.secondary,
-    fontWeight: '700',
-  },
-  summaryGrid: {
+  statsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: SPACING.md,
+    gap: SPACE.md,
   },
-  chartCard: {
+  section: {
+    gap: SPACE.sm,
+  },
+  barRow: {
+    gap: SPACE.xs,
+  },
+  barHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  barLabel: {
+    fontFamily: FONTS.semibold,
+    ...TYPE.body,
+  },
+  barValue: {
+    color: palette.text,
+    fontFamily: FONTS.semibold,
+    ...TYPE.body,
+    fontVariant: ['tabular-nums'],
+  },
+  track: {
+    height: 10,
+    borderRadius: RADIUS.tag,
+    backgroundColor: palette.surfaceMuted,
     overflow: 'hidden',
-    padding: SPACING.md,
-    backgroundColor: COLORS.surface,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: RADII.lg,
-    gap: SPACING.xs,
   },
-  chartTitle: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.cardTitle,
-    fontWeight: '700',
-    paddingHorizontal: SPACING.xs,
-    paddingTop: SPACING.xs,
+  bar: {
+    height: '100%',
+    borderRadius: RADIUS.tag,
   },
-  chartDescription: {
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.caption,
-    lineHeight: 19,
-    paddingHorizontal: SPACING.xs,
+  empty: {
+    color: palette.textMuted,
+    fontFamily: FONTS.regular,
+    ...TYPE.body,
   },
-  chartScroll: {
-    minWidth: '100%',
-    justifyContent: 'center',
-  },
-  chart: {
-    borderRadius: RADII.md,
-    marginTop: SPACING.sm,
-  },
-});
+}));

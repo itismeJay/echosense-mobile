@@ -1,7 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import { COLORS, RADII, SPACING, TYPOGRAPHY } from '../lib/constants';
+import { Text, View } from 'react-native';
+import { FONTS, RADIUS, SPACE, TYPE } from '../lib/theme';
+import { makeStyles, useTheme } from '../lib/useTheme';
+import { Button } from './ui';
 
 interface Props {
   icon: keyof typeof Ionicons.glyphMap;
@@ -12,6 +14,7 @@ interface Props {
   tone?: 'neutral' | 'error';
 }
 
+/** Empty and error states always say what to do next. */
 export default function ScreenState({
   icon,
   title,
@@ -20,93 +23,64 @@ export default function ScreenState({
   onAction,
   tone = 'neutral',
 }: Props) {
+  const palette = useTheme();
+  const styles = useStyles();
   const isError = tone === 'error';
 
   return (
     <View
       style={[styles.container, isError && styles.errorContainer]}
-      accessible
+      accessible={!onAction}
       accessibilityRole={isError ? 'alert' : 'text'}
       accessibilityLiveRegion={isError ? 'assertive' : 'polite'}
     >
-      <View style={[styles.iconCircle, isError && styles.errorIconCircle]}>
-        <Ionicons
-          name={icon}
-          size={28}
-          color={isError ? COLORS.danger : COLORS.information}
-          importantForAccessibility="no-hide-descendants"
-        />
-      </View>
+      <Ionicons
+        name={icon}
+        size={28}
+        color={isError ? palette.danger : palette.textMuted}
+        importantForAccessibility="no-hide-descendants"
+      />
       <Text style={styles.title}>{title}</Text>
       {message ? <Text style={styles.message}>{message}</Text> : null}
       {actionLabel && onAction ? (
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel={actionLabel}
-          style={styles.button}
+        <Button
+          label={actionLabel}
           onPress={onAction}
-          activeOpacity={0.75}
-        >
-          <Text style={styles.buttonText}>{actionLabel}</Text>
-        </TouchableOpacity>
+          variant={isError ? 'primary' : 'secondary'}
+          style={styles.button}
+        />
       ) : null}
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((palette) => ({
   container: {
     alignItems: 'center',
-    backgroundColor: COLORS.surface,
+    backgroundColor: palette.surface,
     borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: RADII.lg,
-    padding: SPACING.xxl,
-    gap: SPACING.sm,
+    borderColor: palette.line,
+    borderRadius: RADIUS.panel,
+    padding: SPACE.xl,
+    gap: SPACE.sm,
   },
   errorContainer: {
-    backgroundColor: COLORS.offlineBackground,
-    borderColor: COLORS.dangerBorder,
-  },
-  iconCircle: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.informationBackground,
-    marginBottom: SPACING.xs,
-  },
-  errorIconCircle: {
-    backgroundColor: COLORS.dangerBackground,
+    borderColor: palette.danger,
   },
   title: {
-    color: COLORS.text,
-    fontSize: TYPOGRAPHY.cardTitle,
-    fontWeight: '700',
+    color: palette.text,
+    fontFamily: FONTS.semibold,
+    ...TYPE.bodyLarge,
     textAlign: 'center',
-    lineHeight: 24,
   },
   message: {
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.secondary,
-    lineHeight: 21,
+    color: palette.textMuted,
+    fontFamily: FONTS.regular,
+    ...TYPE.body,
     textAlign: 'center',
   },
   button: {
-    minHeight: 44,
-    minWidth: 112,
-    marginTop: SPACING.sm,
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.md,
-    borderRadius: RADII.md,
-    backgroundColor: COLORS.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
+    marginTop: SPACE.sm,
+    minWidth: 140,
   },
-  buttonText: {
-    color: COLORS.white,
-    fontSize: TYPOGRAPHY.secondary,
-    fontWeight: '700',
-  },
-});
+}));

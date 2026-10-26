@@ -1,14 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import { COLORS, RADII, SPACING, TYPOGRAPHY } from '../lib/constants';
+import { Text, View } from 'react-native';
 import { formatLastUpdated } from '../lib/presentation';
+import { FONTS, RADIUS, SPACE, TYPE } from '../lib/theme';
+import { makeStyles, useTheme } from '../lib/useTheme';
 
 export default function OfflineBanner({
   lastUpdated,
 }: {
   lastUpdated: Date | null;
 }) {
+  const palette = useTheme();
+  const styles = useStyles();
   return (
     <View
       style={styles.banner}
@@ -18,43 +21,44 @@ export default function OfflineBanner({
     >
       <Ionicons
         name="cloud-offline-outline"
-        size={22}
-        color={COLORS.danger}
+        size={20}
+        color={palette.danger}
         importantForAccessibility="no-hide-descendants"
       />
       <View style={styles.copy}>
-        <Text style={styles.title}>You’re offline.</Text>
+        <Text style={styles.title}>Can’t reach EchoSense right now.</Text>
         <Text style={styles.message}>
-          Previously loaded alerts may be out of date. {formatLastUpdated(lastUpdated)}.
+          These alerts may be out of date. {formatLastUpdated(lastUpdated)}. Pull
+          down to try again.
         </Text>
       </View>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((palette) => ({
   banner: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: SPACING.md,
-    padding: SPACING.lg,
-    borderRadius: RADII.md,
+    gap: SPACE.md,
+    padding: SPACE.md,
+    borderRadius: RADIUS.control,
     borderWidth: 1,
-    borderColor: COLORS.dangerBorder,
-    backgroundColor: COLORS.offlineBackground,
+    borderColor: palette.danger,
+    backgroundColor: palette.dangerBackground,
   },
   copy: {
     flex: 1,
-    gap: SPACING.xs,
+    gap: 2,
   },
   title: {
-    color: COLORS.danger,
-    fontSize: TYPOGRAPHY.secondary,
-    fontWeight: '700',
+    color: palette.danger,
+    fontFamily: FONTS.semibold,
+    ...TYPE.body,
   },
   message: {
-    color: COLORS.textSecondary,
-    fontSize: TYPOGRAPHY.caption,
-    lineHeight: 19,
+    color: palette.text,
+    fontFamily: FONTS.regular,
+    ...TYPE.small,
   },
-});
+}));

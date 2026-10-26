@@ -1,16 +1,15 @@
-import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import { COLORS, RADII, SPACING, TYPOGRAPHY } from '../lib/constants';
+import { Text, View } from 'react-native';
+import { FONTS, RADIUS, SPACE, TYPE } from '../lib/theme';
+import { makeStyles } from '../lib/useTheme';
 
 interface Props {
   label: string;
   value: number | string;
-  color: string;
-  icon: keyof typeof Ionicons.glyphMap;
 }
 
-export default function StatCard({ label, value, color, icon }: Props) {
+export default function StatCard({ label, value }: Props) {
+  const styles = useStyles();
   return (
     <View
       style={styles.card}
@@ -18,48 +17,33 @@ export default function StatCard({ label, value, color, icon }: Props) {
       accessibilityRole="summary"
       accessibilityLabel={`${label}: ${value}`}
     >
-      <View style={[styles.icon, { backgroundColor: COLORS.surfaceSecondary }]}>
-        <Ionicons
-          name={icon}
-          size={21}
-          color={color}
-          importantForAccessibility="no-hide-descendants"
-        />
-      </View>
-      <Text style={styles.value}>{value}</Text>
       <Text style={styles.label}>{label}</Text>
+      <Text style={styles.value}>{value}</Text>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((palette) => ({
   card: {
     flex: 1,
     minWidth: 132,
-    backgroundColor: COLORS.surface,
-    borderRadius: RADII.lg,
+    backgroundColor: palette.surface,
+    borderRadius: RADIUS.panel,
     borderWidth: 1,
-    borderColor: COLORS.border,
-    padding: SPACING.lg,
-    gap: SPACING.sm,
-  },
-  icon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  value: {
-    fontSize: 30,
-    fontWeight: '800',
-    color: COLORS.text,
-    fontVariant: ['tabular-nums'],
+    borderColor: palette.line,
+    padding: SPACE.lg,
+    gap: SPACE.xs,
   },
   label: {
-    fontSize: TYPOGRAPHY.secondary,
-    color: COLORS.textSecondary,
-    fontWeight: '600',
-    lineHeight: 20,
+    color: palette.textMuted,
+    fontFamily: FONTS.medium,
+    ...TYPE.small,
   },
-});
+  value: {
+    color: palette.text,
+    fontFamily: FONTS.semibold,
+    fontSize: 30,
+    lineHeight: 36,
+    fontVariant: ['tabular-nums'],
+  },
+}));
