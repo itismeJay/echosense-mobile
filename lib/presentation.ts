@@ -1,7 +1,5 @@
 import type { Alert, AlertSeverity } from './types';
 
-export type AppRole = 'admin' | 'staff' | 'counselor' | string;
-
 export function normalizeSeverity(
   raw: string | null | undefined
 ): AlertSeverity {
@@ -12,11 +10,18 @@ export function normalizeSeverity(
   return 'unknown';
 }
 
+/** Sentence case, always a word: color alone never carries severity. */
 export function getPriorityLabel(raw: string | null | undefined): string {
-  const severity = normalizeSeverity(raw);
-  return severity === 'unknown'
-    ? 'PRIORITY UNAVAILABLE'
-    : `${severity.toUpperCase()} PRIORITY`;
+  switch (normalizeSeverity(raw)) {
+    case 'high':
+      return 'High';
+    case 'medium':
+      return 'Medium';
+    case 'low':
+      return 'Low';
+    default:
+      return 'Severity unavailable';
+  }
 }
 
 export function getAlertTitle(raw: string | null | undefined): string {
@@ -45,35 +50,10 @@ export function getAlertExplanation(raw: string | null | undefined): string {
   }
 }
 
-export function getRoleLabel(role: AppRole | null | undefined): string {
-  switch ((role ?? '').toLowerCase()) {
-    case 'admin':
-      return 'Administrator';
-    case 'counselor':
-      return 'Guidance counselor';
-    case 'staff':
-      return 'Teacher';
-    default:
-      return 'Staff';
-  }
-}
-
-export function canViewReports(role: AppRole | null | undefined): boolean {
-  return role === 'admin' || role === 'counselor';
-}
-
-export function canViewTechnicalDetails(
-  role: AppRole | null | undefined
-): boolean {
-  return role === 'admin';
-}
-
 export function humanizeStatus(status: string | null | undefined): string {
   if (!status?.trim()) return 'Available';
-  return status
-    .trim()
-    .replace(/[_-]+/g, ' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  const words = status.trim().replace(/[_-]+/g, ' ').toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 export function getGreeting(date = new Date()): string {

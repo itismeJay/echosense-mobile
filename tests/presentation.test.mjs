@@ -2,19 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildAlertNotificationCopy,
-  canViewReports,
-  canViewTechnicalDetails,
   formatDateTime,
   getAlertExplanation,
   getPriorityLabel,
-  getRoleLabel,
   humanizeStatus,
   isToday,
   isWithinDays,
   normalizeSeverity,
   sortAlertsNewestFirst,
 } from '../lib/presentation.ts';
-import { COLORS } from '../lib/constants.ts';
+import { DARK, LIGHT, contrastRatio } from '../lib/theme.ts';
 
 const alert = {
   id: 42,
@@ -28,11 +25,11 @@ const alert = {
 };
 
 test('priority labels include readable text and preserve invalid values safely', () => {
-  assert.equal(getPriorityLabel('high'), 'HIGH PRIORITY');
-  assert.equal(getPriorityLabel('medium'), 'MEDIUM PRIORITY');
-  assert.equal(getPriorityLabel('low'), 'LOW PRIORITY');
+  assert.equal(getPriorityLabel('high'), 'High');
+  assert.equal(getPriorityLabel('medium'), 'Medium');
+  assert.equal(getPriorityLabel('low'), 'Low');
   assert.equal(normalizeSeverity('unexpected'), 'unknown');
-  assert.equal(getPriorityLabel('unexpected'), 'PRIORITY UNAVAILABLE');
+  assert.equal(getPriorityLabel('unexpected'), 'Severity unavailable');
 });
 
 test('teacher-facing explanations avoid definitive claims', () => {
@@ -68,18 +65,6 @@ test('LOW and MEDIUM notification templates remain distinct', () => {
   );
 });
 
-test('existing backend roles map to role-appropriate presentation', () => {
-  assert.equal(getRoleLabel('staff'), 'Teacher');
-  assert.equal(getRoleLabel('counselor'), 'Guidance counselor');
-  assert.equal(getRoleLabel('admin'), 'Administrator');
-  assert.equal(canViewReports('staff'), false);
-  assert.equal(canViewReports('counselor'), true);
-  assert.equal(canViewReports('admin'), true);
-  assert.equal(canViewTechnicalDetails('staff'), false);
-  assert.equal(canViewTechnicalDetails('counselor'), false);
-  assert.equal(canViewTechnicalDetails('admin'), true);
-});
-
 test('timestamps and date filters handle valid and invalid values', () => {
   const now = new Date('2026-07-28T12:00:00.000Z');
   assert.equal(isToday('2026-07-28T02:42:00.000Z', now), true);
@@ -97,37 +82,56 @@ test('alerts are sorted newest first without mutating input', () => {
 });
 
 test('backend statuses are displayed as plain language', () => {
-  assert.equal(humanizeStatus('new_alert'), 'New Alert');
+  assert.equal(humanizeStatus('new_alert'), 'New alert');
   assert.equal(humanizeStatus(''), 'Available');
 });
 
-function hexToRgb(hex) {
-  const value = Number.parseInt(hex.slice(1), 16);
-  return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
-}
+test('labels are sentence case, never all caps', () => {
+  for (const value of ['high', 'medium', 'low', 'other']) {
+    const label = getPriorityLabel(value);
+    assert.notEqual(label, label.toUpperCase());
+  }
+  assert.equal(humanizeStatus('NEEDS_REVIEW'), 'Needs review');
+});
 
-function luminance(hex) {
-  const components = hexToRgb(hex).map((component) => {
-    const value = component / 255;
-    return value <= 0.03928
-      ? value / 12.92
-      : ((value + 0.055) / 1.055) ** 2.4;
+for (const [name, palette] of [
+  ['light', LIGHT],
+  ['dark', DARK],
+]) {
+  test(`${name} theme text, links and buttons meet WCAG AA`, () => {
+    assert.ok(contrastRatio(palette.text, palette.background) >= 4.5);
+    assert.ok(contrastRatio(palette.text, palette.surface) >= 4.5);
+    assert.ok(contrastRatio(palette.textMuted, palette.surface) >= 4.5);
+    assert.ok(contrastRatio(palette.textMuted, palette.background) >= 4.5);
+    assert.ok(contrastRatio(palette.link, palette.surface) >= 4.5);
+    assert.ok(contrastRatio(palette.onBrand, palette.brand) >= 4.5);
+    assert.ok(contrastRatio(palette.danger, palette.dangerBackground) >= 4.5);
+    assert.ok(contrastRatio(palette.lineStrong, palette.surface) >= 3);
   });
-  return (
-    0.2126 * components[0] +
-    0.7152 * components[1] +
-    0.0722 * components[2]
-  );
+
+  test(`${name} theme severity text is readable on its tag`, () => {
+    for (const severity of ['high', 'medium', 'low']) {
+      assert.ok(
+        contrastRatio(palette[severity], palette[`${severity}Background`]) >= 4.5,
+        severity
+      );
+      assert.ok(contrastRatio(palette[severity], palette.surface) >= 4.5, severity);
+    }
+  });
 }
 
-function contrast(left, right) {
-  const lighter = Math.max(luminance(left), luminance(right));
-  const darker = Math.min(luminance(left), luminance(right));
-  return (lighter + 0.05) / (darker + 0.05);
-}
-
-test('core theme text and primary button colors meet readable contrast', () => {
-  assert.ok(contrast(COLORS.text, COLORS.background) >= 4.5);
-  assert.ok(contrast(COLORS.textSecondary, COLORS.surface) >= 4.5);
-  assert.ok(contrast(COLORS.white, COLORS.primary) >= 4.5);
+test('theme uses the specified brand and dark-mode values', () => {
+  assert.equal(LIGHT.brand, '#3ECF8E');
+  assert.equal(LIGHT.onBrand, '#0B2A1C');
+  assert.equal(LIGHT.link, '#1A7F52');
+  assert.equal(LIGHT.surface, '#FFFFFF');
+  assert.equal(DARK.background, '#000000');
+  assert.equal(DARK.surface, '#141414');
+  assert.equal(DARK.line, '#262626');
+  // Green never carries severity.
+  for (const palette of [LIGHT, DARK]) {
+    for (const severity of ['high', 'medium', 'low']) {
+      assert.notEqual(palette[severity], palette.brand);
+    }
+  }
 });

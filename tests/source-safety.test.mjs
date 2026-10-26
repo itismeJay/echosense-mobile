@@ -22,13 +22,107 @@ async function read(relativePath) {
   return readFile(path.join(repositoryRoot, relativePath), 'utf8');
 }
 
-test('staff navigation exposes the four teacher-friendly primary destinations', async () => {
+test('tabs come from the role table and hidden routes stay out of the tab bar', async () => {
   const layout = await read('app/_layout.tsx');
-  for (const route of ['index', 'alerts', 'history', 'profile']) {
-    assert.match(layout, new RegExp(`name="${route}"`));
+  assert.match(layout, /const tabs = visibleTabs\(user\)/);
+  for (const tab of ['alerts', 'analytics', 'settings', 'profile']) {
+    assert.match(layout, new RegExp(`name="${tab}" options=\\{tabOptions\\('${tab}'\\)\\}`));
   }
-  assert.match(layout, /href: showReports \? '\/analytics' : null/);
-  assert.match(layout, /name="settings" options=\{\{ href: null \}\}/);
+  for (const route of ['index', 'history', 'logs', 'login', 'change-password']) {
+    assert.match(layout, new RegExp(`name="${route}" options=\\{\\{ href: null \\}\\}`));
+  }
+});
+
+test('the tab bar is hidden and other screens blocked until the password is changed', async () => {
+  const layout = await read('app/_layout.tsx');
+  assert.match(layout, /const hideTabBar = !isAuthenticated \|\| mustChangePassword/);
+  assert.match(layout, /href: tabs\.includes\(tab\) && !hideTabBar \? undefined : null/);
+  assert.match(
+    layout,
+    /mustChangePassword &&\s+pathname !== '\/change-password'[\s\S]{0,120}router\.replace\('\/change-password'\)/
+  );
+  // Push registration waits for the change, then starts.
+  assert.match(layout, /if \(!user\?\.id \|\| mustChangePassword\) return;/);
+  assert.match(layout, /\}, \[user\?\.id, mustChangePassword\]\);/);
+  // Notification taps wait too.
+  assert.match(layout, /isAuthenticated: isAuthenticated && !mustChangePassword/);
+});
+
+test('staff screens never call report analytics or the dictionary', async () => {
+  const files = [
+    ...(await sourceFiles('app')),
+    ...(await sourceFiles('components')),
+    ...(await sourceFiles('lib')),
+  ];
+  for (const file of files) {
+    const source = await read(file);
+    assert.doesNotMatch(source, /\/alerts\/analytics/, file);
+    assert.doesNotMatch(source, /\/dictionary/, file);
+  }
+  // The only report call is gated before it is made.
+  const reports = await read('app/analytics.tsx');
+  assert.match(reports, /if \(!allowed\) \{\s+setLoading\(false\);\s+return;\s+\}/);
+  assert.match(reports, /const allowed = canViewReports\(user\)/);
+});
+
+test('change password screen calls the backend, refreshes /auth/me and opens alerts', async () => {
+  const screen = await read('app/change-password.tsx');
+  const api = await read('lib/api.ts');
+  assert.match(api, /client\.post<unknown>\('\/auth\/change-password'/);
+  assert.match(api, /current_password: currentPassword/);
+  assert.match(screen, /completePasswordChange\(/);
+  assert.match(screen, /\{ changePassword, fetchMe, getStatus: getHttpStatus \}/);
+  assert.match(screen, /onUserUpdated\(result\.user\);\s+router\.replace\('\/alerts'\)/);
+  assert.match(screen, /secure/);
+});
+
+test('profile offers change password and shows the server', async () => {
+  const profile = await read('app/profile.tsx');
+  assert.match(profile, /label="Change password"/);
+  assert.match(profile, /router\.push\('\/change-password'\)/);
+  assert.match(profile, /describeServer\(serverUrl\)/);
+});
+
+test('every API call and push registration uses the selected server', async () => {
+  const api = await read('lib/api.ts');
+  const auth = await read('lib/auth.ts');
+  const notifications = await read('lib/notifications.ts');
+  assert.match(api, /config\.baseURL = serverUrl/);
+  assert.match(api, /if \(!isAllowedServerUrl\(serverUrl\)\)/);
+  assert.doesNotMatch(api, /baseURL: API_BASE_URL/);
+  assert.doesNotMatch(auth, /API_BASE_URL/);
+  assert.match(auth, /\$\{getServerUrl\(\)\}\/auth\/login/);
+  assert.match(auth, /\$\{getServerUrl\(\)\}\/auth\/me/);
+  assert.match(notifications, /const serverUrl = getServerUrl\(\)/);
+  // The saved server loads before the session is restored.
+  const layout = await read('app/_layout.tsx');
+  assert.match(layout, /loadSavedServer\(\)\s+\.then\(\(\) =>\s+Promise\.all\(\[restoreSession\(\)/);
+});
+
+test('the server option is only on the login screen of demo and development builds', async () => {
+  const login = await read('app/login.tsx');
+  const constants = await read('lib/constants.ts');
+  assert.match(login, /\{SERVER_SWITCHING_ENABLED \? \(\s+<ServerOption/);
+  assert.match(login, /switchServer\(/);
+  assert.match(login, /checkHealth: checkServerHealth/);
+  assert.match(
+    constants,
+    /SERVER_SWITCHING_ENABLED =\s+APP_ENVIRONMENT === 'demo' \|\| APP_ENVIRONMENT === 'development'/
+  );
+});
+
+test('alert detail shows the web review actions and super admins see the school', async () => {
+  const details = await read('app/alert/[id].tsx');
+  const card = await read('components/AlertCard.tsx');
+  const list = await read('app/alerts.tsx');
+  assert.match(details, /getReviewActions\(alert\.status\)/);
+  assert.match(details, /await reviewAlert\(alert\.id, status\)/);
+  assert.match(details, /showsSchoolOnAlerts\(user\)/);
+  assert.match(card, /alert\.school_name/);
+  assert.match(list, /showSchool=\{showSchool\}/);
+  assert.match(list, /fetchAlerts\(tab\)/);
+  assert.match(list, /label: 'Needs review'/);
+  assert.match(list, /label: 'All'/);
 });
 
 test('teacher cards omit technical evidence and use a details action', async () => {
@@ -42,7 +136,7 @@ test('teacher cards omit technical evidence and use a details action', async () 
 
 test('technical alert evidence is gated to administrators', async () => {
   const details = await read('app/alert/[id].tsx');
-  assert.match(details, /canViewTechnicalDetails\(user\?\.role\)/);
+  assert.match(details, /canViewTechnicalDetails\(user\)/);
   assert.match(details, /Technical details/i);
 });
 
@@ -181,7 +275,7 @@ test('alert detail labels validated TEST navigation only after event agreement',
   assert.match(details, /notificationTest/);
   assert.match(details, /notificationEventId/);
   assert.match(details, /alert\.event_id\?\.toLowerCase\(\)/);
-  assert.match(details, /TEST alert data/);
+  assert.match(details, /Test alert, not a real incident/);
 });
 
 test('user-facing alert wording never claims confirmed bullying', async () => {
@@ -197,16 +291,24 @@ test('user-facing alert wording never claims confirmed bullying', async () => {
 });
 
 test('teacher screens include loading, empty, error, and offline wording', async () => {
-  const source = [
-    await read('app/index.tsx'),
-    await read('app/alerts.tsx'),
-    await read('app/history.tsx'),
-  ].join('\n');
+  const source = await read('app/alerts.tsx');
   assert.match(source, /Loading classroom alerts/);
-  assert.match(source, /No alerts need attention right now/);
-  assert.match(source, /No previous alerts were found/);
+  assert.match(source, /Nothing needs review\./);
+  assert.match(source, /No alerts yet\./);
   assert.match(source, /We couldn’t load classroom alerts/);
   assert.match(source, /OfflineBanner/);
+  assert.match(source, /actionLabel="Try again"/);
+});
+
+test('user-facing labels are sentence case, not all caps', async () => {
+  const files = [...(await sourceFiles('app')), ...(await sourceFiles('components'))];
+  for (const file of files) {
+    const source = await read(file);
+    // Quoted JSX text or string literals made only of capital words.
+    assert.doesNotMatch(source, />\s*[A-Z]{3,}(?: [A-Z]{2,})+\s*</, file);
+    assert.doesNotMatch(source, /'(?:HIGH|MEDIUM|LOW)(?: PRIORITY)?'/, file);
+    assert.doesNotMatch(source, /textTransform: 'uppercase'/, file);
+  }
 });
 
 test('alert details and primary actions expose accessibility labels', async () => {
@@ -218,4 +320,28 @@ test('alert details and primary actions expose accessibility labels', async () =
   assert.match(source, /accessibilityLabel/);
   assert.match(source, /accessibilityRole="button"/);
   assert.match(source, /accessibilityLiveRegion/);
+});
+
+test('the axios interceptor and restoreSession use the tested session policy', async () => {
+  const api = await read('lib/api.ts');
+  const auth = await read('lib/auth.ts');
+  assert.match(api, /classifyAuthFailure\(\s+error\.response\?\.status,\s+error\.response\?\.data\?\.detail\s+\)/);
+  assert.match(api, /await handleAuthFailure\(failure, failedToken, \{/);
+  assert.match(api, /clearLocalPushRegistration,\s+onPasswordChangeRequired: notifyPasswordChangeRequired/);
+  assert.match(auth, /return restoreSessionWith\(\{/);
+  assert.match(auth, /clearLocalPushRegistration,\s+\}\);/);
+  assert.match(auth, /const session = parseLoginResponse\(data\)/);
+  assert.match(auth, /await storeUser\(session\.user\)/);
+});
+
+test('login shows the deactivated-school message for 403 school_inactive', async () => {
+  const login = await read('app/login.tsx');
+  assert.match(login, /failure === 'school-inactive'\s+\? SCHOOL_INACTIVE_MESSAGE/);
+  assert.match(login, /signOutReason === 'school_inactive'/);
+});
+
+test('sign-out survives a backend that refuses the push detach with 401 or 403', async () => {
+  const notifications = await read('lib/notifications.ts');
+  assert.match(notifications, /if \(status !== 401 && status !== 403\) throw caught;/);
+  assert.match(notifications, /setLocalPushCleaner\(clearLocalPushRegistration\)/);
 });
