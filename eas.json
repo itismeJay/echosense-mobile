@@ -29,6 +29,16 @@
         "EXPO_PUBLIC_API_BASE_URL": "https://echosense-backend-75h3.onrender.com"
       }
     },
+    "demo": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_APP_ENV": "demo",
+        "EXPO_PUBLIC_API_BASE_URL": "https://echosense-backend-75h3.onrender.com"
+      }
+    },
     "production": {
       "autoIncrement": true,
       "env": {

@@ -38,7 +38,11 @@ module.exports = ({ config }) => {
   const appEnvironment =
     process.env.EXPO_PUBLIC_APP_ENV?.trim().toLowerCase() ?? 'production';
   const isDevelopment = appEnvironment === 'development';
-  const usesLanHttp = isDevelopment && apiBaseUrl.startsWith('http://');
+  // The demo build starts on the live HTTPS server and can be switched to a
+  // local server on the login screen.
+  const isDemo = appEnvironment === 'demo';
+  const usesLanHttp =
+    (isDevelopment && apiBaseUrl.startsWith('http://')) || isDemo;
 
   if (!isDevelopment && !apiBaseUrl.startsWith('https://')) {
     throw new Error('Preview and production API URLs must use HTTPS');
@@ -60,7 +64,7 @@ module.exports = ({ config }) => {
                 NSAllowsLocalNetworking: true,
               },
               NSLocalNetworkUsageDescription:
-                'EchoSense development builds connect to the approved local development server.',
+                'EchoSense connects to an EchoSense server on your local network.',
             }
           : {}),
       },
@@ -71,6 +75,9 @@ module.exports = ({ config }) => {
         'expo-build-properties',
         {
           android: {
+            // Android cannot scope cleartext to IP ranges. The app itself only
+            // sends plain HTTP to 10.x, 172.16–31.x and 192.168.x addresses
+            // (lib/serverConfig.ts, enforced in the lib/api.ts interceptor).
             usesCleartextTraffic: usesLanHttp,
           },
         },
