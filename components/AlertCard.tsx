@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import React from 'react';
+import React, { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { getLanguageLabel } from '../lib/alertEvidence';
 import {
@@ -24,6 +24,7 @@ interface Props {
 export default function AlertCard({ alert, onPress, showSchool = false }: Props) {
   const palette = useTheme();
   const styles = useStyles();
+  const [pressed, setPressed] = useState(false);
   const severity = normalizeSeverity(alert.severity);
   const stripe = severityColors(palette, severity).color;
   const classroom =
@@ -47,8 +48,11 @@ export default function AlertCard({ alert, onPress, showSchool = false }: Props)
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       accessibilityHint="Opens the alert so you can review it"
-      style={({ pressed }) => [styles.card, pressed && styles.pressed]}
+      // A plain style array: NativeWind drops Pressable function styles on native.
+      style={[styles.card, pressed && styles.pressed]}
       onPress={onPress}
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}
     >
       <View style={[styles.stripe, { backgroundColor: stripe }]} />
       <View style={styles.body}>

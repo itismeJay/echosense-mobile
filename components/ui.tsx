@@ -36,6 +36,7 @@ export function Button({
 }) {
   const palette = useTheme();
   const styles = useStyles();
+  const [pressed, setPressed] = useState(false);
   const inactive = disabled || pending;
   const textColor =
     variant === 'primary'
@@ -53,7 +54,11 @@ export function Button({
       accessibilityState={{ disabled: inactive, busy: pending }}
       disabled={inactive}
       onPress={onPress}
-      style={({ pressed }) => [
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}
+      // NativeWind wraps Pressable and drops function styles on native, so
+      // the pressed state is tracked here and a plain style array is passed.
+      style={[
         styles.button,
         variant === 'primary' && styles.primary,
         variant === 'primary' && pressed && styles.primaryPressed,
