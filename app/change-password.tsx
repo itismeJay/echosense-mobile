@@ -59,8 +59,8 @@ export default function ChangePasswordScreen() {
       // Nothing was registered while the change was pending.
     }
     await logout();
+    // The root layout moves a signed-out user to the login screen.
     onSignOut();
-    router.replace('/login');
   }
 
   if (!isAuthenticated) {

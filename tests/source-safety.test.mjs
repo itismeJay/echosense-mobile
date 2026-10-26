@@ -88,7 +88,7 @@ test('every API call and push registration uses the selected server', async () =
   const auth = await read('lib/auth.ts');
   const notifications = await read('lib/notifications.ts');
   assert.match(api, /config\.baseURL = serverUrl/);
-  assert.match(api, /if \(!isAllowedServerUrl\(serverUrl\)\)/);
+  assert.match(api, /if \(!isAllowedServerUrl\(serverUrl, SERVER_RULES\)\)/);
   assert.doesNotMatch(api, /baseURL: API_BASE_URL/);
   assert.doesNotMatch(auth, /API_BASE_URL/);
   assert.match(auth, /\$\{getServerUrl\(\)\}\/auth\/login/);
@@ -344,4 +344,34 @@ test('sign-out survives a backend that refuses the push detach with 401 or 403',
   const notifications = await read('lib/notifications.ts');
   assert.match(notifications, /if \(status !== 401 && status !== 403\) throw caught;/);
   assert.match(notifications, /setLocalPushCleaner\(clearLocalPushRegistration\)/);
+});
+
+test('Pressable styles are plain arrays, not functions (NativeWind drops those on native)', async () => {
+  const files = [...(await sourceFiles('app')), ...(await sourceFiles('components'))];
+  for (const file of files) {
+    assert.doesNotMatch(await read(file), /style=\{\(\{\s*pressed/, file);
+  }
+  const ui = await read('components/ui.tsx');
+  assert.match(ui, /onPressIn=\{\(\) => setPressed\(true\)\}/);
+});
+
+test('only the root layout navigates on sign-in and sign-out', async () => {
+  // A screen redirecting at the same moment as the layout makes React
+  // Navigation drop one REPLACE ("not handled by any navigator").
+  for (const file of ['app/login.tsx', 'app/profile.tsx', 'app/change-password.tsx']) {
+    const source = await read(file);
+    assert.doesNotMatch(source, /router\.replace\('\/login'\)/, file);
+    assert.doesNotMatch(source, /<Redirect href="\/alerts"/, file);
+  }
+  const layout = await read('app/_layout.tsx');
+  assert.match(layout, /!isAuthenticated && pathname !== '\/login'[\s\S]{0,40}router\.replace\('\/login'\)/);
+});
+
+test('the alert list is cleared when the signed-in account changes', async () => {
+  const list = await read('app/alerts.tsx');
+  assert.match(list, /const accountKey = user\?\.id \?\? ''/);
+  assert.match(
+    list,
+    /requestId\.current \+= 1;\s+setAlerts\(\[\]\);\s+setTab\('needs-review'\);\s+setSeverity\('all'\);[\s\S]{0,120}\}, \[accountKey\]\);/
+  );
 });

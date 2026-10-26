@@ -72,6 +72,19 @@ export default function AlertsScreen() {
     }
   }, [params.tab]);
 
+  // This screen stays mounted across sign-out, so a new account must never
+  // see the previous account's list, tab or filter.
+  const accountKey = user?.id ?? '';
+  useEffect(() => {
+    requestId.current += 1;
+    setAlerts([]);
+    setTab('needs-review');
+    setSeverity('all');
+    setError(false);
+    setLastUpdated(null);
+    setLoading(true);
+  }, [accountKey]);
+
   const load = useCallback(
     async (showRefresh = false) => {
       if (!canLoad) return;

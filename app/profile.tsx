@@ -62,8 +62,8 @@ export default function ProfileScreen() {
             try {
               await clearPushRegistration();
               await logout();
+              // The root layout moves a signed-out user to the login screen.
               onSignOut();
-              router.replace('/login');
             } catch {
               Alert.alert(
                 'Couldn’t sign out safely',
