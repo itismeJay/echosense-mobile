@@ -45,8 +45,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   // The demo build starts on the live HTTPS server and can be switched to a
   // local server on the login screen.
   const isDemo = appEnvironment === 'demo';
-  const usesLanHttp =
-    (isDevelopment && apiBaseUrl.startsWith('http://')) || isDemo;
+  // Both builds offer the login screen's server option, so a local HTTP
+  // server must be reachable even when the build starts on HTTPS.
+  const usesLanHttp = isDevelopment || isDemo;
 
   if (!isDevelopment && !apiBaseUrl.startsWith('https://')) {
     throw new Error('Preview and production API URLs must use HTTPS');

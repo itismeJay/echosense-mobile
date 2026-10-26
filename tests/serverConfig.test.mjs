@@ -220,10 +220,7 @@ test('preview and production profiles are unchanged and HTTPS only', async () =>
 test('cleartext is allowed for demo and LAN development builds only', async () => {
   const config = await readFile(path.join(root, 'app.config.ts'), 'utf8');
   assert.match(config, /const isDemo = appEnvironment === 'demo';/);
-  assert.match(
-    config,
-    /const usesLanHttp =\s+\(isDevelopment && apiBaseUrl\.startsWith\('http:\/\/'\)\) \|\| isDemo;/
-  );
+  assert.match(config, /const usesLanHttp = isDevelopment \|\| isDemo;/);
   assert.match(config, /usesCleartextTraffic: usesLanHttp/);
   assert.match(config, /if \(!isDevelopment && !apiBaseUrl\.startsWith\('https:\/\/'\)\)/);
   assert.doesNotMatch(config, /NSAllowsArbitraryLoads/);
